@@ -645,7 +645,7 @@ async function encodePNGFramesToBasis() {
       
       // Call the stream encoder script
       const streamArgs = [
-        'texenc-stream.js',
+        path.join(__dirname, 'texenc-stream.js'),
         '--video', videoInput,
         '--output', ktx2OutputPath,
         '--width', frameWidth.toString(),
@@ -667,8 +667,7 @@ async function encodePNGFramesToBasis() {
       console.log(`\n📦 Encoding ${frameCount} frames to KTX2...`);
       
       try {
-        const result = spawnSync('node', streamArgs, {
-          cwd: path.dirname(require.main.filename),
+        const result = spawnSync(process.execPath, streamArgs, {
           stdio: 'inherit',
         });
         
@@ -893,7 +892,7 @@ async function encodePNGFramesToBasis() {
       
       // Call the stream encoder script with PNG input
       const streamArgs = [
-        'texenc-stream.js',
+        path.join(__dirname, 'texenc-stream.js'),
         '--input', inputDir,
         '--output', ktx2OutputPath,
         '--block', astcBlock,
@@ -917,8 +916,7 @@ async function encodePNGFramesToBasis() {
       console.log(`\n📦 Encoding ${frameFiles.length} frames to KTX2...`);
       
       try {
-        const result = spawnSync('node', streamArgs, {
-          cwd: path.dirname(require.main.filename),
+        const result = spawnSync(process.execPath, streamArgs, {
           stdio: 'inherit',
         });
         
