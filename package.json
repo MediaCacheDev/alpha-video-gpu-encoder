@@ -1,0 +1,43 @@
+{
+  "name": "alpha-video-gpu-encoder",
+  "version": "1.0.0",
+  "description": "Encode PNG sequences and videos into ASTC KTX2 texture streams for alpha-video-gpu",
+  "bin": {
+    "texenc": "./texenc.js",
+    "texenc-stream": "./texenc-stream.js"
+  },
+  "files": [
+    "texenc.js",
+    "texenc-stream.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "ktx2",
+    "astc",
+    "uastc",
+    "texture",
+    "gpu-texture",
+    "animation",
+    "alpha",
+    "encoder",
+    "alpha-video-gpu"
+  ],
+  "author": "Daniel Kasprowicz",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danielkpl2/alpha-video-gpu-encoder.git"
+  },
+  "bugs": {
+    "url": "https://github.com/danielkpl2/alpha-video-gpu-encoder/issues"
+  },
+  "homepage": "https://github.com/danielkpl2/alpha-video-gpu-encoder#readme",
+  "dependencies": {
+    "commander": "^14.0.2",
+    "sharp": "^0.34.5"
+  }
+}
