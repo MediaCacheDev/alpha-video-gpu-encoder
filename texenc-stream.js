@@ -24,23 +24,8 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, spawnSync } = require('child_process');
 const os = require('os');
+const { resolveAstcenc, defaultParallelism } = require('./tools');
 let sharp = null;  // Lazy-loaded for alpha premultiplication
-
-// Detect performance cores (macOS) or fall back to total cores - 1
-function getPerformanceCores() {
-  try {
-    // On macOS with Apple Silicon, get performance core count
-    const { execSync } = require('child_process');
-    const perfCores = parseInt(execSync('sysctl -n hw.perflevel0.logicalcpu 2>/dev/null', { encoding: 'utf8' }).trim());
-    if (!isNaN(perfCores) && perfCores > 0) {
-      return perfCores;
-    }
-  } catch (e) {
-    // Not macOS or sysctl not available
-  }
-  // Fallback: use total cores - 1
-  return Math.max(1, os.cpus().length - 1);
-}
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -53,10 +38,10 @@ const options = {
   frames: null,
   block: '4x4',
   quality: 'fast',
-  astcenc: './astcenc-sdk/bin/astcenc',
+  astcenc: null,  // --astcenc, else $ASTCENC, else astcenc on PATH
   zstd: 0,  // Compression level (0 = none, 1-22 = zstd)
   innerCompression: false,  // Use KTX2 internal supercompression (vs outer .zst wrapper)
-  parallel: getPerformanceCores(),  // Parallel astcenc processes (performance cores only)
+  parallel: defaultParallelism(),  // Parallel astcenc processes
   alpha: false,  // Enable alpha channel with premultiplication
 };
 
@@ -90,9 +75,10 @@ Options:
   -f, --frames <count>   Number of frames to process (optional, auto-detected if omitted)
   -b, --block <NxN>      ASTC block size (default: 4x4)
   -q, --quality <level>  Quality: fastest,fast,medium,thorough,exhaustive (default: fast)
-  -j, --parallel <N>     Parallel astcenc processes (default: CPU cores - 1)
+  -j, --parallel <N>     Parallel astcenc processes (default: performance cores on
+                         Apple silicon, otherwise CPU cores - 1)
   -a, --alpha            Enable alpha channel with premultiplication (requires sharp)
-  --astcenc <path>       Path to astcenc binary
+  --astcenc <path>       astcenc binary (default: $ASTCENC, then astcenc on PATH)
   --zstd <level>         Compression level (1-22, default: 0 = none)
   --inner-compression    Use KTX2 internal supercompression (default: outer .zst wrapper)
 
@@ -113,9 +99,11 @@ if (options.video && options.input) {
   process.exit(1);
 }
 
-if (!fs.existsSync(options.astcenc)) {
-  console.error(`❌ astcenc not found: ${options.astcenc}`);
+options.astcenc = resolveAstcenc(options.astcenc);
+if (!options.astcenc || !fs.existsSync(options.astcenc)) {
+  console.error(`❌ astcenc not found${options.astcenc ? `: ${options.astcenc}` : ' (looked at --astcenc, $ASTCENC and PATH)'}`);
   console.error('   Download from: https://github.com/ARM-software/astc-encoder/releases');
+  console.error('   Then put it on PATH, set $ASTCENC, or pass --astcenc <path>');
   process.exit(1);
 }
 

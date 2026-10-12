@@ -16,7 +16,22 @@
  * Output:
  *   - Array mode (default): outputs animation.ktx2 (texture array with streaming)
  *   - Atlas mode: outputs animation.ktx2 or animation.glb (GLB container with all parts)
+ *
+ * `texenc doctor` checks the external tools instead of encoding.
  */
+
+const { resolveAstcenc, runDoctor } = require('./tools');
+
+// Before requiring sharp, so the doctor can report it missing.
+if (process.argv[2] === 'doctor') {
+  const doctorArgs = process.argv.slice(3);
+  const valueOf = flag => {
+    const index = doctorArgs.indexOf(flag);
+    return index >= 0 ? doctorArgs[index + 1] : undefined;
+  };
+  const ok = runDoctor({ toktx: valueOf('--toktx'), astcenc: valueOf('--astcenc') });
+  process.exit(ok ? 0 : 1);
+}
 
 const sharp = require('sharp');
 const { execSync, spawnSync } = require('child_process');
@@ -524,11 +539,20 @@ program
   .option('--mode <type>', 'Packing mode: array (default, texture array, 1 frame per layer) or atlas (frames in grid)', 'array')
   .option('--outer-compression', 'Use outer .zst wrapper instead of KTX2 internal zstd supercompression')
   .option('--use-stream-encoder', 'Use memory-efficient streaming encoder (~50MB RAM per frame, requires astcenc)')
-  .option('--astcenc <path>', 'Path to astcenc binary (for stream encoder)', './astcenc-sdk/bin/astcenc')
+  .option('--astcenc <path>', 'astcenc binary for the stream encoder (default: $ASTCENC, then astcenc on PATH)')
   .option('-y, --yes', 'Non-interactive mode: skip prompts, use defaults (for automated scripts)')
+  .addHelpText('after', '\nCommands:\n  texenc doctor [--toktx <path>] [--astcenc <path>]   Check the external tools and exit')
   .parse();
 
 const options = program.opts();
+
+function exitUnlessAstcencFound(astcencPath) {
+  if (astcencPath && fs.existsSync(astcencPath)) return;
+  console.error(`❌ astcenc not found${astcencPath ? `: ${astcencPath}` : ' (looked at --astcenc, $ASTCENC and PATH)'}`);
+  console.error('   Download from: https://github.com/ARM-software/astc-encoder/releases');
+  console.error('   Then put it on PATH, set $ASTCENC, or pass --astcenc <path>');
+  process.exit(1);
+}
 
 async function encodePNGFramesToBasis() {
   console.log('🎨 PNG to Basis Universal Atlas Encoder\n');
@@ -562,9 +586,10 @@ async function encodePNGFramesToBasis() {
   // Validate stream encoder mode (Node.js - memory efficient)
   // Supports both --video and --input (PNG directory)
   const useStreamEncoder = options.useStreamEncoder === true;
-  const astcencPath = options.astcenc || './astcenc-sdk/bin/astcenc';
+  const astcencPath = resolveAstcenc(options.astcenc);
   
   if (useStreamEncoder) {
+    exitUnlessAstcencFound(astcencPath);
     if (packingMode !== 'array') {
       console.error('❌ --use-stream-encoder requires --mode array');
       process.exit(1);
@@ -872,15 +897,7 @@ async function encodePNGFramesToBasis() {
   if (packingMode === 'array') {
     // Check if user wants to use stream encoder (for PNG input)
     if (options.useStreamEncoder && useASTC) {
-      const astcencPath = options.astcenc;
-      
-      // Check if astcenc exists
-      if (!fs.existsSync(astcencPath)) {
-        console.error(`❌ astcenc not found: ${astcencPath}`);
-        console.error('   Download from: https://github.com/ARM-software/astc-encoder/releases');
-        console.error('   Or specify path with --astcenc <path>');
-        process.exit(1);
-      }
+      exitUnlessAstcencFound(astcencPath);
       
       console.log(`🚀 Using memory-efficient stream encoder (~50MB RAM per frame)`);
       console.log(`   Source: ${inputDir}`);

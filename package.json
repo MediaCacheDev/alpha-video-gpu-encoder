@@ -9,6 +9,7 @@
   "files": [
     "texenc.js",
     "texenc-stream.js",
+    "tools.js",
     "README.md",
     "LICENSE"
   ],

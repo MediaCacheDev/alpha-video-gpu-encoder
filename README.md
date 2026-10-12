@@ -158,9 +158,38 @@ curl -sL "https://github.com/ARM-software/astc-encoder/releases/download/5.3.0/a
 unzip astcenc.zip -d astcenc-sdk
 ```
 
-The default `--astcenc` path is `./astcenc-sdk/bin/astcenc`, relative to the directory you run the command from. Pass `--astcenc /path/to/astcenc` if it lives elsewhere.
+The encoders look for astcenc in this order: `--astcenc <path>`, the `ASTCENC` environment variable, then `astcenc` on `PATH` (also `astcenc-native`, `-neon`, `-avx2`, `-sse4.1` and `-sse2`, the names in ARM's release zips). For the zips above, either add `astcenc-sdk/bin` to `PATH` or point at the binary:
+
+```bash
+export ASTCENC="$PWD/astcenc-sdk/bin/astcenc"        # macOS
+export ASTCENC="$PWD/astcenc-sdk/bin/astcenc-avx2"   # Linux x64
+```
+
+### Checking the setup
+
+```bash
+texenc doctor
+```
+
+lists each tool with its version or an install hint, and what it is needed for. It exits with status 1 when `toktx` or `sharp` is missing, since every default encode needs them. `--toktx <path>` and `--astcenc <path>` check specific binaries.
 
 ## Usage
+
+### Recipes
+
+| Goal | Encode | Play with |
+|------|--------|-----------|
+| Short UI animation in an app | `texenc -i ./frames -o anim.ktx2` | the defaults (all frames loaded) |
+| Long animation, constant memory | `texenc -i ./frames -o anim.ktx2` | `stream` |
+| Many players on screen, lowest CPU | `texenc -i ./frames -o anim.ktx2 --zstd 0` | `stream` (memory-mapped, no decompression) |
+| Play while it downloads | `texenc -i ./frames -o anim --outer-compression` (writes `anim.ktx2.zst`) | the defaults (always streams) |
+| Desktop browsers without ASTC | `texenc -i ./frames -o anim.ktx2 --uastc` | the defaults |
+| Smaller file, softer detail | `texenc -i ./frames -o anim.ktx2 --astc-block 6x6` | the defaults |
+| Opaque content | `texenc -i ./frames -o anim.ktx2 --no-alpha` | the defaults |
+| Long or large video, little RAM | `texenc -v in.mp4 -o anim.ktx2 --frame-count 900 --use-stream-encoder` | `stream` |
+| WebGL 1 browsers | `texenc -i ./frames -o anim --mode atlas` | the defaults |
+
+`--fps` defaults to 30. "Play with" names the `alpha-video-gpu` props; see its README for the memory options.
 
 ### Basic Usage (Recommended)
 
@@ -253,7 +282,7 @@ texenc --input ./frames --output output.ktx2 --fps 30 --uastc
 |-----------|---------|-------------|
 | `--no-alpha` | off | Disable alpha channel (for opaque content) |
 | `--use-stream-encoder` | off | Use the memory-efficient stream encoder (requires `astcenc`) |
-| `--astcenc <path>` | `./astcenc-sdk/bin/astcenc` | Path to astcenc binary |
+| `--astcenc <path>` | `$ASTCENC`, then `astcenc` on `PATH` | astcenc binary for the stream encoder |
 | `--toktx <path>` | toktx | Path to toktx binary |
 | `--keep-atlas` | off | Keep intermediate atlas PNG file (atlas mode) |
 | `--no-glb` | off | Output separate KTX2 files instead of a GLB container (multi-part atlas) |
