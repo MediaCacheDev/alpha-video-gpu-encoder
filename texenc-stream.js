@@ -422,12 +422,13 @@ async function main() {
   const kvdOffset = dfdOffset + dfd.length;
   const afterKvd = kvdOffset + kvd.length;
   
-  // Align data to 16 bytes (mipPadding requirement)
-  const alignedDataOffset = Math.ceil(afterKvd / 16) * 16;
-  const padding = alignedDataOffset - afterKvd;
-  
   // Build header - use supercompressionScheme=2 for inner compression
   const supercompressionScheme = useInnerCompression ? 2 : 0;
+  
+  // Uncompressed ASTC level data starts on a 16-byte boundary (the block size);
+  // supercompressed level data follows the KVD directly, with no padding.
+  const alignedDataOffset = supercompressionScheme === 0 ? Math.ceil(afterKvd / 16) * 16 : afterKvd;
+  const padding = alignedDataOffset - afterKvd;
   const header = buildKTX2Header(options.width, options.height, options.frames, supercompressionScheme);
   header.writeUInt32LE(dfdOffset, 48);   // dfdByteOffset at 0x30
   header.writeUInt32LE(dfd.length, 52);  // dfdByteLength at 0x34

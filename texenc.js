@@ -132,6 +132,11 @@ function packageKTX2ToGLB(ktx2Files, metadata, outputPath) {
   return glb.length;
 }
 
+function lcm(a, b) {
+  const gcd = (x, y) => (y === 0 ? x : gcd(y, x % y));
+  return (a / gcd(a, b)) * b;
+}
+
 /**
  * Inject custom metadata into a KTX2 file's key-value data section.
  * KTX2 format: https://github.khronos.org/KTX-Specification/
@@ -172,12 +177,20 @@ function injectKTX2Metadata(ktx2Path, key, value) {
   const oldSgdPadding = sgdByteLength > 0 ? (8 - (oldKvdEnd % 8)) % 8 : 0;
   const newSgdPadding = sgdByteLength > 0 ? (8 - (newKvdEnd % 8)) % 8 : 0;
   
-  // Level data starts after SGD (or after KVD if no SGD)
-  const oldLevelDataStart = sgdByteLength > 0 ? sgdByteOffset + sgdByteLength : oldKvdEnd + oldSgdPadding;
-  const levelDataOffset = kvdLengthDiff + (newSgdPadding - oldSgdPadding);
+  // Without supercompression, level data must start on a multiple of lcm(texel block size, 4)
+  // (bytesPlane0 in the DFD; 16 for ASTC and UASTC). Supercompressed level data must follow
+  // the KVD/SGD directly, with no padding.
+  const supercompressed = view.getUint32(44, true) !== 0;
+  const bytesPlane0 = data[dfdByteOffset + 20];
+  const levelAlignment = !supercompressed && bytesPlane0 > 0 ? lcm(bytesPlane0, 4) : 1;
+  const levelStarts = Array.from({ length: levelCount }, (_, i) => Number(view.getBigUint64(80 + i * 24, true)));
+  const oldLevelDataStart = Math.min(...levelStarts);
+  const afterKvdAndSgd = sgdByteLength > 0 ? newKvdEnd + newSgdPadding + sgdByteLength : newKvdEnd;
+  const newLevelDataStart = Math.ceil(afterKvdAndSgd / levelAlignment) * levelAlignment;
+  const levelDataOffset = newLevelDataStart - oldLevelDataStart;
   
   // Build new file
-  const newSize = data.length + kvEntryTotalLength + (newSgdPadding - oldSgdPadding);
+  const newSize = data.length + levelDataOffset;
   const newData = Buffer.alloc(newSize);
   
   // Copy header (0-80) and level index
@@ -256,8 +269,7 @@ function injectKTX2Metadata(ktx2Path, key, value) {
   }
   
   // Copy level data
-  const levelDataLength = data.length - oldLevelDataStart;
-  data.copy(newData, writePos, oldLevelDataStart, data.length);
+  data.copy(newData, newLevelDataStart, oldLevelDataStart, data.length);
   
   fs.writeFileSync(ktx2Path, newData);
   console.log(`   ✓ Injected metadata key "${key}" (${value.length} bytes)`);
