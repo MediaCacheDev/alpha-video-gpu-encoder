@@ -191,6 +191,7 @@ async function encodeTextureArray(opts) {
     hasAlpha,
     astcQuality,
     astcBlock,
+    astcPerceptual,
     zstdLevel,
     outputBase,
     toktxPath,
@@ -264,11 +265,13 @@ async function encodeTextureArray(opts) {
       '--encode', 'astc',
       '--astc_blk_d', astcBlock,
       '--astc_quality', astcQuality,
-      '--astc_perceptual',         // Perceptual optimization for better quality
       '--assign_oetf', 'linear',   // Premultiplied alpha requires linear
       '--assign_primaries', 'none', // No color space conversion
       '--layers', frameCount.toString(),
     ];
+    if (astcPerceptual) {
+      astcArgs.push('--astc_perceptual');
+    }
 
     // KTX2 internal zstd supercompression
     if (zstdLevel > 0) {
@@ -354,6 +357,8 @@ program
   .option('--frame-count <number>', 'Number of frames to extract from video (required with --video)')
   .option('--astc-quality <level>', 'ASTC quality: fastest, fast, medium, thorough, exhaustive', 'thorough')
   .option('--astc-block <size>', 'ASTC block size: 4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6, 8x8, 10x5, 10x6, 10x8, 10x10, 12x10, 12x12', '4x4')
+  .option('--astc-perceptual', 'Optimize ASTC for perceived quality rather than RMS error (default)')
+  .option('--no-astc-perceptual', 'Optimize ASTC for RMS error instead')
   .option('--zstd <level>', 'KTX2 internal Zstandard supercompression level (0-22, higher=smaller, 0=uncompressed)', '18')
   .option('--toktx <path>', 'Path to toktx binary', 'toktx')
   .option('--no-alpha', 'Disable alpha channel (for opaque content)')
@@ -383,6 +388,8 @@ async function encodeFrames() {
   const hasAlpha = options.alpha !== false;
   const astcQuality = options.astcQuality || 'thorough';
   const astcBlock = options.astcBlock || '4x4';
+  // Both flags are defined, so commander leaves the value unset unless one is given
+  const astcPerceptual = options.astcPerceptual !== false;
   const zstdLevel = options.zstd !== undefined ? parseInt(options.zstd) : 18;
   
   // Normalize output path - strip any extension, we'll add the correct one later
@@ -478,6 +485,9 @@ async function encodeFrames() {
         '--quality', astcQuality,
         '--astcenc', astcencPath,
       ];
+      if (!astcPerceptual) {
+        streamArgs.push('--no-perceptual');
+      }
       
       if (zstdLevel > 0) {
         streamArgs.push('--zstd', zstdLevel.toString());
@@ -588,7 +598,7 @@ async function encodeFrames() {
   console.log(`📐 Frame size: ${frameWidth}x${frameHeight}`);
   console.log(`🎬 Frame rate: ${frameRate} fps`);
   console.log(`🔲 Alpha: ${hasAlpha ? 'Yes' : 'No'}`);
-  console.log(`🎯 ASTC block=${astcBlock}, quality=${astcQuality}`);
+  console.log(`🎯 ASTC block=${astcBlock}, quality=${astcQuality}${astcPerceptual ? ', perceptual' : ''}`);
   if (zstdLevel > 0) {
     console.log(`🗜️  Zstd compression: level ${zstdLevel} (KTX2 internal)`);
   } else {
@@ -680,6 +690,9 @@ async function encodeFrames() {
       '--quality', astcQuality,
       '--astcenc', astcencPath,
     ];
+    if (!astcPerceptual) {
+      streamArgs.push('--no-perceptual');
+    }
     
     if (zstdLevel > 0) {
       streamArgs.push('--zstd', zstdLevel.toString());
@@ -740,6 +753,7 @@ async function encodeFrames() {
       hasAlpha,
       astcQuality,
       astcBlock,
+      astcPerceptual,
       zstdLevel,
       outputBase,
       toktxPath,

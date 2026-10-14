@@ -42,6 +42,7 @@ const options = {
   zstd: 0,  // KTX2 internal zstd level (0 = none, 1-22)
   parallel: defaultParallelism(),  // Parallel astcenc processes
   alpha: false,  // Enable alpha channel with premultiplication
+  perceptual: true,  // astcenc -perceptual
 };
 
 for (let i = 0; i < args.length; i++) {
@@ -58,6 +59,7 @@ for (let i = 0; i < args.length; i++) {
   else if (arg === '--zstd') options.zstd = parseInt(args[++i]);
   else if (arg === '--parallel' || arg === '-j') options.parallel = parseInt(args[++i]);
   else if (arg === '--alpha' || arg === '-a') options.alpha = true;
+  else if (arg === '--no-perceptual') options.perceptual = false;
   else if (arg === '--help') {
     console.log(`
 KTX2 Streaming Encoder - Memory Efficient
@@ -78,6 +80,7 @@ Options:
   -a, --alpha            Enable alpha channel with premultiplication (requires sharp)
   --astcenc <path>       astcenc binary (default: $ASTCENC, then astcenc on PATH)
   --zstd <level>         KTX2 internal zstd supercompression level (1-22, default: 0 = none)
+  --no-perceptual        Optimize for RMS error instead of perceived quality (astcenc -perceptual is on by default)
 
 Memory Usage: ~50MB per frame (not all frames at once!)
 `);
@@ -204,7 +207,7 @@ console.log(`   Dimensions: ${options.width}x${options.height}`);
 console.log(`   Frames: ${options.frames}`);
 console.log(`   Alpha: ${options.alpha ? 'Yes (premultiplied)' : 'No'}`);
 console.log(`   ASTC block: ${options.block}`);
-console.log(`   Quality: ${options.quality}`);
+console.log(`   Quality: ${options.quality}${options.perceptual ? ', perceptual' : ''}`);
 console.log(`   ASTC frame size: ${(astcFrameSize / 1024).toFixed(1)} KB`);
 console.log(`   Total output: ~${(astcFrameSize * options.frames / 1024 / 1024).toFixed(1)} MB`);
 console.log(`   Memory per frame: ~${(options.width * options.height * 3 / 1024 / 1024).toFixed(1)} MB`);
@@ -501,9 +504,9 @@ async function main() {
           const job = frameJobs[jobIndex];
           running++;
           
-          const proc = spawn(options.astcenc, [
-            '-cl', job.pngPath, job.astcPath, options.block, `-${options.quality}`, '-silent'
-          ], { stdio: 'pipe' });
+          const astcencArgs = ['-cl', job.pngPath, job.astcPath, options.block, `-${options.quality}`, '-silent'];
+          if (options.perceptual) astcencArgs.push('-perceptual');
+          const proc = spawn(options.astcenc, astcencArgs, { stdio: 'pipe' });
           
           proc.on('close', (code) => {
             running--;

@@ -176,7 +176,7 @@ lists each tool with its version or an install hint, and what it is needed for. 
 
 ### Basic Usage (Recommended)
 
-Simplest command - auto-detects dimensions, uses sensible defaults (texture array, ASTC 4x4, `thorough` quality, inner zstd 18, alpha on):
+Simplest command - auto-detects dimensions, uses sensible defaults (texture array, ASTC 4x4, `thorough` quality, perceptual, inner zstd 18, alpha on):
 
 ```bash
 # From PNG frames
@@ -223,6 +223,7 @@ texenc --input ./frames --output output.ktx2 --fps 30 --no-alpha
 |-----------|---------|--------------|-------------|
 | `--astc-quality <level>` | thorough | fastest, fast, medium, thorough, exhaustive | Encoding quality level |
 | `--astc-block <size>` | 4x4 | 4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6, 8x8, 10x5, 10x6, 10x8, 10x10, 12x10, 12x12 | Block size (smaller = higher quality, larger file) |
+| `--no-astc-perceptual` | perceptual on | flag | Optimize for RMS error instead of perceived quality (toktx `--astc_perceptual`, astcenc `-perceptual`) |
 | `--zstd <level>` | 18 | 0-22 | KTX2 internal Zstandard supercompression level (higher = smaller, slower; 0 = uncompressed) |
 
 ### Other Options
@@ -302,7 +303,7 @@ Benchmarked on Apple Silicon (M-series) with 100 frames at 1920×1080:
 
 ### Standalone Stream Encoder
 
-`texenc-stream` has its own defaults: `fast` quality, no compression and no alpha unless you pass `--zstd` and `--alpha`.
+`texenc-stream` has its own defaults: `fast` quality, no compression and no alpha unless you pass `--zstd` and `--alpha`. Perceptual mode is on, as in `texenc`; `--no-perceptual` turns it off.
 
 ```bash
 # From PNG frames
