@@ -98,7 +98,7 @@ function runDoctor({ toktx = 'toktx', astcenc } = {}) {
     { name: 'ffmpeg', usedFor: '--video input', version: probeVersion('ffmpeg', ['-version']), hint: INSTALL_HINTS.ffmpeg },
     { name: 'ffprobe', usedFor: '--video input, and frame sizes for the stream encoder',
       version: probeVersion('ffprobe', ['-version']), hint: INSTALL_HINTS.ffmpeg },
-    { name: 'zstd', usedFor: '--outer-compression, and compression in the stream encoder',
+    { name: 'zstd', usedFor: 'compression in the stream encoder',
       version: probeVersion('zstd', ['--version']), hint: INSTALL_HINTS.zstd },
     { name: 'sharp', usedFor: 'reading PNG frames (an npm dependency)', required: true,
       version: sharpVersion, hint: 'reinstall alpha-video-gpu-encoder (npm install)' },

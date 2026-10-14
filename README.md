@@ -1,12 +1,12 @@
 # alpha-video-gpu-encoder
 
-Encodes video files and PNG sequences into GPU-compressed KTX2 texture streams for [alpha-video-gpu](https://github.com/danielkpl2/alpha-video-gpu).
+Encodes video files and PNG sequences into ASTC texture arrays in KTX2 files for [alpha-video-gpu](https://github.com/danielkpl2/alpha-video-gpu).
 
 ## What It Does
 
 1. **Extracts frames** from video files (MP4, MOV, etc.) or reads PNG sequences
 2. **Encodes to ASTC** using `toktx` (KTX-Software) or `astcenc` (ARM)
-3. **Packs into KTX2** texture arrays with optional zstd compression
+3. **Packs into KTX2** texture arrays with optional zstd supercompression
 4. **Injects animation metadata** (`BasisPlayerMetadata`) into the KTX2 key-value data
 5. **Supports streaming** - constant memory playback regardless of video length
 
@@ -16,24 +16,11 @@ Encodes video files and PNG sequences into GPU-compressed KTX2 texture streams f
 |------|-----------|-------------|
 | **KTX2** | Khronos Texture 2.0 | Container format for GPU-compressed textures. Stores texture data with metadata, supports mipmaps, texture arrays, and internal compression. Think of it as "MP4 for textures". |
 | **ASTC** | Adaptive Scalable Texture Compression | GPU texture compression format developed by ARM. Supported natively on all modern mobile GPUs (iOS, Android) and Apple Silicon Macs. Offers configurable quality/size tradeoff via block sizes (4x4 to 12x12). |
-| **UASTC** | Universal ASTC | A variant of ASTC from Basis Universal that can be transcoded at runtime to other GPU formats (BC7, ETC2, PVRTC). Use when you need to support older GPUs that don't have native ASTC. Slightly larger files than native ASTC. |
 | **Zstd** | Zstandard | Fast lossless compression algorithm by Facebook. Used to compress ASTC data for smaller file sizes. Decompresses at ~1GB/s on modern hardware. |
 | **Texture Array** | 2D Texture Array | GPU feature that stores multiple 2D images as layers in a single texture. Each animation frame is one layer. More efficient than individual textures. |
 | **astcenc** | ASTC Encoder | ARM's official ASTC compression tool. Used by the stream encoder for memory-efficient encoding. |
-| **toktx** | To KTX | KTX-Software's tool for creating KTX2 files. Supports both ASTC and UASTC encoding. |
+| **toktx** | To KTX | KTX-Software's tool for creating KTX2 files. Used for the default ASTC encode. |
 | **Premultiplied Alpha** | - | Alpha blending technique where RGB values are pre-multiplied by alpha. Prevents dark "halo" artifacts around transparent edges. This encoder always premultiplies when alpha is enabled. |
-
-### ASTC vs UASTC
-
-| Feature | ASTC (Native) | UASTC |
-|---------|---------------|-------|
-| **File size** | Smaller | ~15% larger |
-| **GPU support** | iOS, Android, Apple Silicon | Universal (transcodes to any format) |
-| **Load time** | Instant (direct upload) | Requires transcoding (~50ms) |
-| **Quality** | Highest | Very high |
-| **Use case** | Mobile apps, Apple platforms | Web, cross-platform |
-
-**Recommendation:** Use native ASTC for mobile apps and Apple platforms. Use UASTC only if you need to support older desktop GPUs without ASTC.
 
 ### ASTC Block Sizes
 
@@ -122,7 +109,6 @@ KTX2 File → Zstd Decompress → ASTC Data → Direct GPU Upload → Render
 | Mode | Description | Use Case |
 |------|-------------|----------|
 | **Inner zstd** (default) | KTX2 internal supercompression | Single `.ktx2` file, streaming playback |
-| **Outer zstd** | Whole-file `.ktx2.zst` wrapper | Progressive download + decompress |
 | **Uncompressed** | No compression (`--zstd 0`) | Direct mmap, fastest load |
 
 ## Installation
@@ -139,9 +125,9 @@ The encoder drives external tools. Install the ones your workflow needs:
 
 | Tool | Needed for | Install (macOS) |
 |------|-----------|-----------------|
-| `toktx` (KTX-Software) | Default encode path, UASTC, atlas mode | `brew install ktx` |
+| `toktx` (KTX-Software) | Default encode path | `brew install ktx` |
 | `ffmpeg` + `ffprobe` | `--video` input and dimension probing | `brew install ffmpeg` |
-| `zstd` | Any `--zstd` level above 0 | `brew install zstd` |
+| `zstd` | `--zstd` above 0 with the stream encoder | `brew install zstd` |
 | `astcenc` (ARM) | `--use-stream-encoder` and `texenc-stream` | See below |
 
 ### Optional: astcenc for the stream encoder
@@ -182,12 +168,9 @@ lists each tool with its version or an install hint, and what it is needed for. 
 | Short UI animation in an app | `texenc -i ./frames -o anim.ktx2` | the defaults (all frames loaded) |
 | Long animation, constant memory | `texenc -i ./frames -o anim.ktx2` | `stream` |
 | Many players on screen, lowest CPU | `texenc -i ./frames -o anim.ktx2 --zstd 0` | `stream` (memory-mapped, no decompression) |
-| Play while it downloads | `texenc -i ./frames -o anim --outer-compression` (writes `anim.ktx2.zst`) | the defaults (always streams) |
-| Desktop browsers without ASTC | `texenc -i ./frames -o anim.ktx2 --uastc` | the defaults |
 | Smaller file, softer detail | `texenc -i ./frames -o anim.ktx2 --astc-block 6x6` | the defaults |
 | Opaque content | `texenc -i ./frames -o anim.ktx2 --no-alpha` | the defaults |
 | Long or large video, little RAM | `texenc -v in.mp4 -o anim.ktx2 --frame-count 900 --use-stream-encoder` | `stream` |
-| WebGL 1 browsers | `texenc -i ./frames -o anim --mode atlas` | the defaults |
 
 `--fps` defaults to 30. "Play with" names the `alpha-video-gpu` props; see its README for the memory options.
 
@@ -215,22 +198,6 @@ texenc --input ./frames --output output.ktx2 --fps 30
 texenc --input ./frames --output output.ktx2 --fps 30 --no-alpha
 ```
 
-### Atlas Mode
-
-For shorter animations, packs frames into a 2D grid instead of a texture array:
-
-```bash
-texenc --input ./frames --output output.ktx2 --fps 30 --mode atlas
-```
-
-### UASTC Mode
-
-For universal compatibility (transcodes at runtime):
-
-```bash
-texenc --input ./frames --output output.ktx2 --fps 30 --uastc
-```
-
 ## Parameters
 
 ### Input / Output
@@ -240,7 +207,7 @@ texenc --input ./frames --output output.ktx2 --fps 30 --uastc
 | `-i, --input <dir>` | Input directory containing PNG frames (use `--input` or `--video`) |
 | `-v, --video <file>` | Input video file; frames are extracted with ffmpeg |
 | `--frame-count <num>` | Number of frames to extract (required with `--video`) |
-| `-o, --output <path>` | **Required.** Output path (extension auto-determined: `.ktx2` for single, `.glb` for multi-part) |
+| `-o, --output <path>` | **Required.** Output path; the file is written as `.ktx2` |
 
 ### Frame Options
 
@@ -249,15 +216,6 @@ texenc --input ./frames --output output.ktx2 --fps 30 --uastc
 | `-w, --width <px>` | auto | Frame width (auto-detected from input) |
 | `-h, --height <px>` | auto | Frame height (auto-detected from input) |
 | `-f, --fps <num>` | 30 | Frame rate for playback |
-| `--mode <type>` | array | `array` (texture array, 1 frame per layer) or `atlas` (frames in a grid) |
-| `--max-texture-size <px>` | 8192 | Maximum texture size before splitting into parts (atlas mode) |
-
-### Encoding Mode
-
-| Parameter | Description |
-|-----------|-------------|
-| `--astc` | Native ASTC encoding (default; highest quality, requires an ASTC GPU) |
-| `--uastc` | UASTC encoding (universal, transcodes at runtime) |
 
 ### ASTC Options
 
@@ -265,16 +223,7 @@ texenc --input ./frames --output output.ktx2 --fps 30 --uastc
 |-----------|---------|--------------|-------------|
 | `--astc-quality <level>` | thorough | fastest, fast, medium, thorough, exhaustive | Encoding quality level |
 | `--astc-block <size>` | 4x4 | 4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6, 8x8, 10x5, 10x6, 10x8, 10x10, 12x10, 12x12 | Block size (smaller = higher quality, larger file) |
-| `--astc-perceptual` | off | flag | Optimize for perceptual quality |
-| `--zstd <level>` | 18 | 0-22 | Zstandard compression level (higher = smaller, slower; 0 = uncompressed) |
-| `--outer-compression` | off | flag | Use outer `.zst` wrapper instead of KTX2 internal zstd |
-
-### UASTC Options
-
-| Parameter | Default | Range | Description |
-|-----------|---------|-------|-------------|
-| `--uastc-level <level>` | 4 | 0-4 | Encoding level (higher = better quality, slower) |
-| `--uastc-rdo <lambda>` | off | 0-10 | RDO quality (0.25 = high quality, 3.0 = small file) |
+| `--zstd <level>` | 18 | 0-22 | KTX2 internal Zstandard supercompression level (higher = smaller, slower; 0 = uncompressed) |
 
 ### Other Options
 
@@ -284,30 +233,15 @@ texenc --input ./frames --output output.ktx2 --fps 30 --uastc
 | `--use-stream-encoder` | off | Use the memory-efficient stream encoder (requires `astcenc`) |
 | `--astcenc <path>` | `$ASTCENC`, then `astcenc` on `PATH` | astcenc binary for the stream encoder |
 | `--toktx <path>` | toktx | Path to toktx binary |
-| `--keep-atlas` | off | Keep intermediate atlas PNG file (atlas mode) |
-| `--no-glb` | off | Output separate KTX2 files instead of a GLB container (multi-part atlas) |
-| `--json-metadata` | off | Output separate JSON metadata file |
 | `-y, --yes` | off | Non-interactive mode (skip prompts, for scripts) |
 
-## Output Formats
+## Output Format
 
-### Texture Array (default)
-- A single `.ktx2` file, one frame per array layer, with embedded metadata.
-
-### Single Atlas (`--mode atlas`)
-When all frames fit in one atlas (within `--max-texture-size`):
-- A single `.ktx2` file with embedded metadata.
-
-### Multi-Part Atlas (`--mode atlas`)
-When frames exceed the max texture size:
-- **With GLB (default):** a single `.glb` file containing all KTX2 parts + metadata
-- **With `--no-glb`:** separate `_0.ktx2`, `_1.ktx2`, etc. files with metadata in the first part
+A single `.ktx2` file holding an ASTC texture array, one frame per layer, with embedded metadata.
 
 ## Metadata Format
 
-The encoder embeds JSON metadata under the `BasisPlayerMetadata` KTX2 key, which the player reads.
-
-Texture array (default):
+The encoder embeds JSON metadata under the `BasisPlayerMetadata` KTX2 key, which the player reads:
 
 ```json
 {
@@ -325,40 +259,6 @@ Texture array (default):
 }
 ```
 
-Atlas:
-
-```json
-{
-  "version": 2,
-  "format": "ktx2",
-  "mode": "astc",
-  "layout": "grid-2d",
-  "frameWidth": 400,
-  "frameHeight": 400,
-  "frameCount": 120,
-  "framesPerPart": 64,
-  "framesPerRow": 8,
-  "maxRowsPerPart": 8,
-  "partCount": 2,
-  "frameRate": 30,
-  "atlasWidth": 3200,
-  "atlasHeight": 3200,
-  "hasAlpha": true,
-  "hasMipmaps": false,
-  "parts": [
-    {
-      "index": 0,
-      "startFrame": 0,
-      "endFrame": 63,
-      "frameCount": 64,
-      "rows": 8,
-      "columns": 8,
-      "file": "animation_0.ktx2"
-    }
-  ]
-}
-```
-
 ## Memory-Efficient Stream Encoder
 
 The `--use-stream-encoder` option enables a memory-efficient encoder that processes frames one at a time instead of loading everything into RAM. Essential for long videos or high-resolution content.
@@ -372,7 +272,7 @@ The `--use-stream-encoder` option enables a memory-efficient encoder that proces
 texenc --input ./frames --output output.ktx2 --fps 30 --use-stream-encoder
 
 # Or directly
-texenc-stream --input ./frames --output output.ktx2 --zstd 18 --inner-compression --alpha
+texenc-stream --input ./frames --output output.ktx2 --zstd 18 --alpha
 ```
 
 ### Performance Comparison
@@ -402,7 +302,7 @@ Benchmarked on Apple Silicon (M-series) with 100 frames at 1920×1080:
 
 ### Standalone Stream Encoder
 
-`texenc-stream` has its own defaults: `fast` quality, no compression and no alpha unless you pass `--zstd`, `--inner-compression` and `--alpha`.
+`texenc-stream` has its own defaults: `fast` quality, no compression and no alpha unless you pass `--zstd` and `--alpha`.
 
 ```bash
 # From PNG frames
@@ -412,8 +312,7 @@ texenc-stream \
   --block 4x4 \
   --quality fast \
   --alpha \
-  --zstd 18 \
-  --inner-compression
+  --zstd 18
 
 # From video
 texenc-stream \
@@ -422,8 +321,7 @@ texenc-stream \
   --frames 1000 \
   --block 4x4 \
   --quality fast \
-  --zstd 18 \
-  --inner-compression
+  --zstd 18
 ```
 
 Run `texenc-stream --help` for all options.

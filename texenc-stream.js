@@ -39,8 +39,7 @@ const options = {
   block: '4x4',
   quality: 'fast',
   astcenc: null,  // --astcenc, else $ASTCENC, else astcenc on PATH
-  zstd: 0,  // Compression level (0 = none, 1-22 = zstd)
-  innerCompression: false,  // Use KTX2 internal supercompression (vs outer .zst wrapper)
+  zstd: 0,  // KTX2 internal zstd level (0 = none, 1-22)
   parallel: defaultParallelism(),  // Parallel astcenc processes
   alpha: false,  // Enable alpha channel with premultiplication
 };
@@ -57,7 +56,6 @@ for (let i = 0; i < args.length; i++) {
   else if (arg === '--quality' || arg === '-q') options.quality = args[++i];
   else if (arg === '--astcenc') options.astcenc = args[++i];
   else if (arg === '--zstd') options.zstd = parseInt(args[++i]);
-  else if (arg === '--inner-compression') options.innerCompression = true;
   else if (arg === '--parallel' || arg === '-j') options.parallel = parseInt(args[++i]);
   else if (arg === '--alpha' || arg === '-a') options.alpha = true;
   else if (arg === '--help') {
@@ -79,8 +77,7 @@ Options:
                          Apple silicon, otherwise CPU cores - 1)
   -a, --alpha            Enable alpha channel with premultiplication (requires sharp)
   --astcenc <path>       astcenc binary (default: $ASTCENC, then astcenc on PATH)
-  --zstd <level>         Compression level (1-22, default: 0 = none)
-  --inner-compression    Use KTX2 internal supercompression (default: outer .zst wrapper)
+  --zstd <level>         KTX2 internal zstd supercompression level (1-22, default: 0 = none)
 
 Memory Usage: ~50MB per frame (not all frames at once!)
 `);
@@ -408,7 +405,7 @@ function buildKVD() {
 
 async function main() {
   const totalAstcSize = astcFrameSize * options.frames;
-  const useInnerCompression = options.innerCompression && options.zstd > 0;
+  const useInnerCompression = options.zstd > 0;
   
   // Calculate offsets
   // Layout: Header (80) | Level Index (24) | DFD (44) | KVD (variable) | padding | Data
@@ -745,20 +742,7 @@ async function main() {
   const stats = fs.statSync(outputPath);
   console.log(`✓ Output: ${outputPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
   
-  // Apply external zstd if requested (only when not using inner compression)
-  if (options.zstd > 0 && !useInnerCompression) {
-    const zstdOutput = outputPath + '.zst';
-    console.log(`\n🗜️  Compressing with external zstd level ${options.zstd}...`);
-    execSync(`zstd -${options.zstd} -f "${outputPath}" -o "${zstdOutput}"`, { stdio: 'pipe' });
-    
-    const zstdStats = fs.statSync(zstdOutput);
-    const ratio = (stats.size / zstdStats.size).toFixed(2);
-    console.log(`✓ Compressed: ${(stats.size / 1024 / 1024).toFixed(2)} MB → ${(zstdStats.size / 1024 / 1024).toFixed(2)} MB (${ratio}x)`);
-    
-    // Remove uncompressed
-    fs.unlinkSync(outputPath);
-    console.log(`✓ Final output: ${zstdOutput}`);
-  } else if (useInnerCompression) {
+  if (useInnerCompression) {
     console.log(`✓ Final output: ${outputPath} (KTX2 internal zstd, supercompressionScheme=2)`);
   }
   
