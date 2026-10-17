@@ -111,6 +111,14 @@ KTX2 File → Zstd Decompress → ASTC Data → Direct GPU Upload → Render
 | **Inner zstd** (default) | KTX2 internal supercompression | Single `.ktx2` file, streaming playback |
 | **Uncompressed** | No compression (`--zstd 0`) | Direct mmap, fastest load |
 
+### Seek points
+
+A streaming player decodes zstd from where it is to where it needs to be, so with one zstd stream a seek decodes everything before its target: about 1.5 s on an M4 Pro to reach the end of a 5-minute 360p clip, and 2.9 s for 60 s of 1080p. With `--zstd` above 0, the encoder therefore starts a new zstd frame every `--seek-interval` MB of ASTC (default 8) and appends a seek table, in zstd's [seekable format](https://github.com/facebook/zstd/tree/dev/contrib/seekable_format), as the level's last bytes. The player starts decoding at the frame before its target, so no seek decodes more than one interval (about 6 ms for 8 MB).
+
+The cost is size: zstd can't refer back past a frame start. On long clips, 8 MB intervals added 0.8% (360p, 5 min) and 1.6% (1080p, 60 s), and 32 MB intervals 0.2% and 0.4%. Clips with less ASTC than one interval come out as one stream, exactly as without seek points. `--seek-interval 0` always writes one stream, the smallest file, for clips that only play and loop.
+
+Both layouts are ordinary KTX2 zstd data. Any zstd decoder reads the frames as one stream and skips the table, so players and tools that don't know about seek points play these files from the start as before.
+
 ## Installation
 
 ```bash
@@ -127,7 +135,7 @@ The encoder drives external tools. Install the ones your workflow needs:
 |------|-----------|-----------------|
 | `toktx` (KTX-Software) | Default encode path | `brew install ktx` |
 | `ffmpeg` + `ffprobe` (5.1 or newer) | `--video` input and dimension probing | `brew install ffmpeg` |
-| `zstd` | `--zstd` above 0 with the stream encoder | `brew install zstd` |
+| `zstd` | `--zstd` above 0 with the stream encoder, and seek points (clips over `--seek-interval`) | `brew install zstd` |
 | `astcenc` (ARM) | `--use-stream-encoder` and `texenc-stream` | See below |
 
 ### Optional: astcenc for the stream encoder
@@ -225,6 +233,7 @@ texenc --input ./frames --output output.ktx2 --fps 30 --no-alpha
 | `--astc-block <size>` | 4x4 | 4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6, 8x8, 10x5, 10x6, 10x8, 10x10, 12x10, 12x12 | Block size (smaller = higher quality, larger file) |
 | `--no-astc-perceptual` | perceptual on | flag | Optimize for RMS error instead of perceived quality (toktx `--astc_perceptual`, astcenc `-perceptual`) |
 | `--zstd <level>` | 18 | 0-22 | KTX2 internal Zstandard supercompression level (higher = smaller, slower; 0 = uncompressed) |
+| `--seek-interval <MB>` | 8 | 0 or more, decimals allowed | With zstd, a seek point every that many MB of ASTC (see [Seek points](#seek-points)); 0 = one zstd stream |
 
 ### Other Options
 

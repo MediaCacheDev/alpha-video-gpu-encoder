@@ -26,6 +26,7 @@ const { execSync, spawn } = require('child_process');
 const { once } = require('events');
 const os = require('os');
 const { resolveAstcenc, defaultParallelism } = require('./tools');
+const { LevelCompressor, layersPerSeekPoint } = require('./zstd-level');
 let sharp = null;  // Lazy-loaded for alpha premultiplication
 
 // Parse command line arguments
@@ -41,6 +42,7 @@ const options = {
   quality: 'fast',
   astcenc: null,  // --astcenc, else $ASTCENC, else astcenc on PATH
   zstd: 0,  // KTX2 internal zstd level (0 = none, 1-22)
+  seekInterval: 8,  // MB of ASTC per zstd frame (seek point); 0 = one stream
   parallel: defaultParallelism(),  // Parallel astcenc processes
   alpha: false,  // Enable alpha channel with premultiplication
   perceptual: true,  // astcenc -perceptual
@@ -58,6 +60,7 @@ for (let i = 0; i < args.length; i++) {
   else if (arg === '--quality' || arg === '-q') options.quality = args[++i];
   else if (arg === '--astcenc') options.astcenc = args[++i];
   else if (arg === '--zstd') options.zstd = parseInt(args[++i]);
+  else if (arg === '--seek-interval') options.seekInterval = parseFloat(args[++i]);
   else if (arg === '--parallel' || arg === '-j') options.parallel = parseInt(args[++i]);
   else if (arg === '--alpha' || arg === '-a') options.alpha = true;
   else if (arg === '--no-perceptual') options.perceptual = false;
@@ -81,6 +84,9 @@ Options:
   -a, --alpha            Enable alpha channel with premultiplication (PNG input needs sharp)
   --astcenc <path>       astcenc binary (default: $ASTCENC, then astcenc on PATH)
   --zstd <level>         KTX2 internal zstd supercompression level (1-22, default: 0 = none)
+  --seek-interval <MB>   With --zstd: a seek point every <MB> of ASTC, so seeks decode at most
+                         that much (default: 8). 0 writes one zstd stream: the smallest file,
+                         for clips that only play and loop
   --no-perceptual        Optimize for RMS error instead of perceived quality (astcenc -perceptual is on by default)
 
 Memory Usage: ~50MB per frame (not all frames at once!)
@@ -97,6 +103,11 @@ if ((!options.video && !options.input) || !options.output) {
 
 if (options.video && options.input) {
   console.error('❌ Use either --video or --input, not both');
+  process.exit(1);
+}
+
+if (!(options.seekInterval >= 0)) {
+  console.error('❌ --seek-interval must be 0 (one stream) or a size in MB');
   process.exit(1);
 }
 
@@ -530,27 +541,20 @@ async function main() {
   const batchSize = Math.min(50, options.frames);  // Max 50 frames in temp at once
   const parallelJobs = options.parallel;
   
-  // For inner compression: setup zstd streaming compressor
-  let zstdProcess = null;
-  let compressedBytesWritten = 0;
+  // For inner compression: compressed level data goes straight to the KTX2 file
+  let levelCompressor = null;
   
   if (useInnerCompression) {
+    const seekLayers = layersPerSeekPoint(options.seekInterval, astcFrameSize);
     console.log(`📦 Using KTX2 internal zstd compression (level ${options.zstd})`);
-    
-    // Spawn zstd process that reads from stdin and writes to stdout
-    const { spawn } = require('child_process');
-    zstdProcess = spawn('zstd', ['-' + options.zstd, '-c'], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    
-    // Pipe zstd stdout directly to the KTX2 file at the data offset
-    zstdProcess.stdout.on('data', (chunk) => {
-      fs.writeSync(fd, chunk);
-      compressedBytesWritten += chunk.length;
-    });
-    
-    zstdProcess.stderr.on('data', (data) => {
-      // zstd progress output - ignore
+    console.log(seekLayers > 0 && seekLayers < options.frames
+      ? `   Seek point every ${seekLayers} frames (${(seekLayers * astcFrameSize / 1024 / 1024).toFixed(1)} MB)`
+      : '   One zstd stream (no seek points)');
+    levelCompressor = new LevelCompressor({
+      level: options.zstd,
+      layersPerSeekPoint: seekLayers,
+      parallel: parallelJobs,
+      write: (chunk) => fs.writeSync(fd, chunk),
     });
   }
   
@@ -718,9 +722,8 @@ async function main() {
       }
       
       // Write to KTX2 (directly or through zstd)
-      if (useInnerCompression && zstdProcess) {
-        // Pipe through zstd - it will write compressed data to fd via stdout handler
-        if (!zstdProcess.stdin.write(astcPayload)) await once(zstdProcess.stdin, 'drain');
+      if (levelCompressor) {
+        await levelCompressor.addLayer(astcPayload);
       } else {
         fs.writeSync(fd, astcPayload);
       }
@@ -753,23 +756,14 @@ async function main() {
 
   console.log('\n✓ All frames encoded');
   
-  // For inner compression: close zstd stdin, wait for completion, patch header
-  if (useInnerCompression && zstdProcess) {
-    // Close stdin to signal end of input
-    zstdProcess.stdin.end();
-    
-    // Wait for zstd to finish
-    await new Promise((resolve, reject) => {
-      zstdProcess.on('close', (code) => {
-        if (code !== 0) {
-          reject(new Error(`zstd exited with code ${code}`));
-        } else {
-          resolve();
-        }
-      });
-    });
+  // For inner compression: finish the level data, patch header
+  if (levelCompressor) {
+    const compressedBytesWritten = await levelCompressor.finish();
     
     console.log(`✓ Compressed: ${(totalAstcSize / 1024 / 1024).toFixed(2)} MB → ${(compressedBytesWritten / 1024 / 1024).toFixed(2)} MB (${(totalAstcSize / compressedBytesWritten).toFixed(2)}x)`);
+    if (levelCompressor.seekPoints > 0) {
+      console.log(`✓ Seek table: ${levelCompressor.seekPoints} seek points`);
+    }
     
     // Patch the level index with actual compressed size
     // Level index is at offset 80 (after header)

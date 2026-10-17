@@ -6,6 +6,7 @@ First public release.
 
 - `texenc` encodes PNG sequences and videos into ASTC texture arrays in KTX2 files for alpha-video-gpu (default block 4×4, `thorough`). Alpha is on and premultiplied by default.
 - Compression: KTX2-internal zstd (default level 18) or none.
+- Seek points: with zstd, a new zstd frame every `--seek-interval` MB of ASTC (default 8) and a seek table in zstd's seekable format at the end of the level, so streaming players seek by decoding at most one interval. On long clips, 8 MB intervals cost 0.8–1.6% in size. `--seek-interval 0`, and clips shorter than one interval, give one zstd stream as before. With seek points, toktx compresses at level 1 and the level is then recompressed at `--zstd`; the stream encoder compresses up to `--parallel` frames at once.
 - Perceptual ASTC encoding by default, with both toktx and astcenc (the stream encoder); `--no-astc-perceptual` optimizes for RMS error instead.
 - The `BasisPlayerMetadata` key the player reads. The earlier UASTC, atlas, GLB and whole-file `.zst` outputs are on the `archive/basis-atlas-parts` branch.
 - `texenc-stream` (also `texenc --use-stream-encoder`) encodes frame by frame with astcenc, so memory stays flat however long the input is.

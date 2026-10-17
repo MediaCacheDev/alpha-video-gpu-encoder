@@ -16,7 +16,8 @@
  * `texenc doctor` checks the external tools instead of encoding.
  */
 
-const { resolveAstcenc, runDoctor } = require('./tools');
+const { resolveAstcenc, defaultParallelism, runDoctor } = require('./tools');
+const { compressLevelData, layersPerSeekPoint } = require('./zstd-level');
 
 // Before requiring sharp, so the doctor can report it missing.
 if (process.argv[2] === 'doctor') {
@@ -178,6 +179,45 @@ function injectKTX2Metadata(ktx2Path, key, value) {
   console.log(`   ✓ Injected metadata key "${key}" (${value.length} bytes)`);
 }
 
+function astcBytesPerLayer(width, height, astcBlock) {
+  const [blockWidth, blockHeight] = astcBlock.split('x').map(Number);
+  return Math.ceil(width / blockWidth) * Math.ceil(height / blockHeight) * 16;
+}
+
+/**
+ * Recompresses a KTX2 file's zstd level data with seek points (see zstd-level.js). toktx only
+ * writes one zstd stream.
+ */
+async function rewriteLevelWithSeekPoints(ktx2Path, { zstdLevel, bytesPerLayer, layersPerSeekPoint }) {
+  const data = fs.readFileSync(ktx2Path);
+  const levelCount = Math.max(1, data.readUInt32LE(40));
+  const levelOffset = Number(data.readBigUInt64LE(80));
+  const levelLength = Number(data.readBigUInt64LE(88));
+  const uncompressedLength = Number(data.readBigUInt64LE(96));
+  if (levelCount !== 1 || levelOffset + levelLength !== data.length) {
+    throw new Error('expected one mip level at the end of the KTX2 file');
+  }
+
+  const decompressed = spawnSync('zstd', ['-d', '-c', '-q'], {
+    input: data.subarray(levelOffset),
+    maxBuffer: uncompressedLength + 1024,
+  });
+  if (decompressed.status !== 0 || decompressed.stdout.length !== uncompressedLength) {
+    throw new Error(`zstd could not decompress the level data${decompressed.error ? `: ${decompressed.error.message}` : ''}`);
+  }
+
+  const { data: levelData, seekPoints } = await compressLevelData(decompressed.stdout, {
+    level: zstdLevel,
+    bytesPerLayer,
+    layersPerSeekPoint,
+    parallel: defaultParallelism(),
+  });
+  const header = Buffer.from(data.subarray(0, levelOffset));
+  header.writeBigUInt64LE(BigInt(levelData.length), 88);
+  fs.writeFileSync(ktx2Path, Buffer.concat([header, levelData]));
+  return seekPoints;
+}
+
 /**
  * Encode frames as a 2D texture array (one frame per layer).
  * Uses toktx --layers to create a single KTX2 with all frames as array layers.
@@ -193,11 +233,15 @@ async function encodeTextureArray(opts) {
     astcBlock,
     astcPerceptual,
     zstdLevel,
+    seekInterval,
     outputBase,
     toktxPath,
   } = opts;
 
   const frameCount = frameFiles.length;
+  const bytesPerLayer = astcBytesPerLayer(frameWidth, frameHeight, astcBlock);
+  const seekLayers = zstdLevel > 0 ? layersPerSeekPoint(seekInterval, bytesPerLayer) : 0;
+  const addSeekPoints = seekLayers > 0 && seekLayers < frameCount;
   const outputDir = path.dirname(outputBase);
   const baseName = path.basename(outputBase);
 
@@ -273,9 +317,10 @@ async function encodeTextureArray(opts) {
       astcArgs.push('--astc_perceptual');
     }
 
-    // KTX2 internal zstd supercompression
+    // KTX2 internal zstd supercompression. With seek points, the level is recompressed at
+    // zstdLevel afterwards, so toktx compresses quickly.
     if (zstdLevel > 0) {
-      astcArgs.push('--zcmp', zstdLevel.toString());
+      astcArgs.push('--zcmp', addSeekPoints ? '1' : zstdLevel.toString());
     }
 
     // Add output path
@@ -308,10 +353,6 @@ async function encodeTextureArray(opts) {
       throw error;
     }
 
-    // Get output file size
-    const stats = fs.statSync(ktx2OutputPath);
-    const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
-
     // Create and inject metadata
     const metadata = {
       version: 1,
@@ -329,12 +370,20 @@ async function encodeTextureArray(opts) {
 
     injectKTX2Metadata(ktx2OutputPath, 'BasisPlayerMetadata', JSON.stringify(metadata));
 
+    let seekPoints = 0;
+    if (addSeekPoints) {
+      console.log(`   Compressing at zstd level ${zstdLevel} with a seek point every ${seekLayers} frames...`);
+      seekPoints = await rewriteLevelWithSeekPoints(ktx2OutputPath, { zstdLevel, bytesPerLayer, layersPerSeekPoint: seekLayers });
+    }
+
+    const sizeMB = (fs.statSync(ktx2OutputPath).size / 1024 / 1024).toFixed(2);
     console.log(`\n✅ Texture array created: ${ktx2OutputPath}`);
     console.log(`   Size: ${sizeMB}MB`);
     console.log(`   Layers: ${frameCount}`);
     console.log(`   Frame size: ${frameWidth}x${frameHeight}`);
     if (zstdLevel > 0) {
       console.log(`   Compression: KTX2 internal zstd (supercompressionScheme=2)`);
+      console.log(seekPoints > 0 ? `   Seek points: ${seekPoints}` : '   Seek points: none (one zstd stream)');
     } else {
       console.log(`   Compression: None (uncompressed)`);
     }
@@ -360,6 +409,7 @@ program
   .option('--astc-perceptual', 'Optimize ASTC for perceived quality rather than RMS error (default)')
   .option('--no-astc-perceptual', 'Optimize ASTC for RMS error instead')
   .option('--zstd <level>', 'KTX2 internal Zstandard supercompression level (0-22, higher=smaller, 0=uncompressed)', '18')
+  .option('--seek-interval <MB>', 'With zstd: a seek point every <MB> of ASTC, so seeks decode at most that much; 0 = one zstd stream, the smallest file, for clips that only play and loop', '8')
   .option('--toktx <path>', 'Path to toktx binary', 'toktx')
   .option('--no-alpha', 'Disable alpha channel (for opaque content)')
   .option('--use-stream-encoder', 'Use memory-efficient streaming encoder (~50MB RAM per frame, requires astcenc)')
@@ -391,6 +441,11 @@ async function encodeFrames() {
   // Both flags are defined, so commander leaves the value unset unless one is given
   const astcPerceptual = options.astcPerceptual !== false;
   const zstdLevel = options.zstd !== undefined ? parseInt(options.zstd) : 18;
+  const seekInterval = parseFloat(options.seekInterval);
+  if (!(seekInterval >= 0)) {
+    console.error('❌ --seek-interval must be 0 (one stream) or a size in MB');
+    process.exit(1);
+  }
   
   // Normalize output path - strip any extension, we'll add the correct one later
   const outputExt = path.extname(options.output);
@@ -490,7 +545,7 @@ async function encodeFrames() {
       }
       
       if (zstdLevel > 0) {
-        streamArgs.push('--zstd', zstdLevel.toString());
+        streamArgs.push('--zstd', zstdLevel.toString(), '--seek-interval', seekInterval.toString());
       }
 
       if (hasAlpha) {
@@ -699,7 +754,7 @@ async function encodeFrames() {
     }
     
     if (zstdLevel > 0) {
-      streamArgs.push('--zstd', zstdLevel.toString());
+      streamArgs.push('--zstd', zstdLevel.toString(), '--seek-interval', seekInterval.toString());
     }
     
     // Pass alpha flag for premultiplication
@@ -759,6 +814,7 @@ async function encodeFrames() {
       astcBlock,
       astcPerceptual,
       zstdLevel,
+      seekInterval,
       outputBase,
       toktxPath,
     });

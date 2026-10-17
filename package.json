@@ -10,6 +10,7 @@
     "texenc.js",
     "texenc-stream.js",
     "tools.js",
+    "zstd-level.js",
     "README.md",
     "LICENSE"
   ],
