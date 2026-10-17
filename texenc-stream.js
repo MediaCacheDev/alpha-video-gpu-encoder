@@ -22,7 +22,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawnSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
+const { once } = require('events');
 const os = require('os');
 const { resolveAstcenc, defaultParallelism } = require('./tools');
 let sharp = null;  // Lazy-loaded for alpha premultiplication
@@ -77,7 +78,7 @@ Options:
   -q, --quality <level>  Quality: fastest,fast,medium,thorough,exhaustive (default: fast)
   -j, --parallel <N>     Parallel astcenc processes (default: performance cores on
                          Apple silicon, otherwise CPU cores - 1)
-  -a, --alpha            Enable alpha channel with premultiplication (requires sharp)
+  -a, --alpha            Enable alpha channel with premultiplication (PNG input needs sharp)
   --astcenc <path>       astcenc binary (default: $ASTCENC, then astcenc on PATH)
   --zstd <level>         KTX2 internal zstd supercompression level (1-22, default: 0 = none)
   --no-perceptual        Optimize for RMS error instead of perceived quality (astcenc -perceptual is on by default)
@@ -107,12 +108,12 @@ if (!options.astcenc || !fs.existsSync(options.astcenc)) {
   process.exit(1);
 }
 
-// Load sharp if alpha mode is enabled
-if (options.alpha) {
+// Premultiplying PNG input needs sharp; video frames arrive from ffmpeg as raw pixels
+if (options.alpha && options.input) {
   try {
     sharp = require('sharp');
   } catch (e) {
-    console.error('❌ --alpha requires sharp: npm install sharp');
+    console.error('❌ --alpha with --input requires sharp: npm install sharp');
     process.exit(1);
   }
 }
@@ -406,6 +407,79 @@ function buildKVD() {
   return kvd;
 }
 
+// One ffmpeg process decodes the whole input once and pipes raw BGR(A) frames, which are
+// read on demand so the pipe holds ffmpeg back while astcenc catches up.
+function startVideoFrames(channels) {
+  const ffmpeg = spawn('ffmpeg', [
+    '-v', 'error',
+    '-i', options.video,
+    '-an',
+    '-vf', `scale=${options.width}:${options.height}`,
+    '-frames:v', String(options.frames),
+    '-fps_mode', 'passthrough',
+    '-f', 'rawvideo',
+    '-pix_fmt', channels === 4 ? 'bgra' : 'bgr24',
+    'pipe:1',
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  let errorText = '';
+  ffmpeg.stderr.on('data', (data) => { errorText += data; });
+  ffmpeg.on('error', (err) => { errorText += err.message; });
+  const exited = once(ffmpeg, 'close');
+  exited.catch(() => {});  // a failed spawn is reported through read() returning null
+
+  const frameSize = options.width * options.height * channels;
+  const chunks = ffmpeg.stdout[Symbol.asyncIterator]();
+  let pending = [];
+  let pendingBytes = 0;
+
+  // Resolves to the next frame, or null once ffmpeg has no more
+  async function read() {
+    while (pendingBytes < frameSize) {
+      const { value, done } = await chunks.next();
+      if (done) return null;
+      pending.push(value);
+      pendingBytes += value.length;
+    }
+    const joined = pending.length === 1 ? pending[0] : Buffer.concat(pending, pendingBytes);
+    pending = joined.length > frameSize ? [joined.subarray(frameSize)] : [];
+    pendingBytes = joined.length - frameSize;
+    return joined.subarray(0, frameSize);
+  }
+
+  // Reads to the end of the pipe, which lets ffmpeg exit, and resolves to its exit code
+  async function finish() {
+    while (!(await chunks.next()).done) {}
+    const [code] = await exited;
+    return code;
+  }
+
+  return { read, finish, errorText: () => errorText.trim() };
+}
+
+function premultiplyBgra(pixels) {
+  for (let p = 0; p < pixels.length; p += 4) {
+    const a = pixels[p + 3] / 255;
+    pixels[p + 0] = Math.round(pixels[p + 0] * a);
+    pixels[p + 1] = Math.round(pixels[p + 1] * a);
+    pixels[p + 2] = Math.round(pixels[p + 2] * a);
+  }
+}
+
+// Uncompressed TGA, which astcenc reads, so frames skip PNG encoding and decoding
+function writeTga(filePath, pixels, width, height, channels) {
+  const header = Buffer.alloc(18);
+  header[2] = 2;  // uncompressed true-colour
+  header.writeUInt16LE(width, 12);
+  header.writeUInt16LE(height, 14);
+  header[16] = channels * 8;
+  header[17] = 0x20 | (channels === 4 ? 8 : 0);  // top-left origin, alpha bits
+  const fd = fs.openSync(filePath, 'w');
+  fs.writeSync(fd, header);
+  fs.writeSync(fd, pixels);
+  fs.closeSync(fd);
+}
+
 async function main() {
   const totalAstcSize = astcFrameSize * options.frames;
   const useInnerCompression = options.zstd > 0;
@@ -504,7 +578,7 @@ async function main() {
           const job = frameJobs[jobIndex];
           running++;
           
-          const astcencArgs = ['-cl', job.pngPath, job.astcPath, options.block, `-${options.quality}`, '-silent'];
+          const astcencArgs = ['-cl', job.imagePath, job.astcPath, options.block, `-${options.quality}`, '-silent'];
           if (options.perceptual) astcencArgs.push('-perceptual');
           const proc = spawn(options.astcenc, astcencArgs, { stdio: 'pipe' });
           
@@ -512,7 +586,7 @@ async function main() {
             running--;
             if (code !== 0 && !failed) {
               failed = true;
-              reject(new Error(`astcenc failed on ${job.pngPath}`));
+              reject(new Error(`astcenc failed on ${job.imagePath}`));
               return;
             }
             
@@ -539,6 +613,9 @@ async function main() {
     });
   }
   
+  const videoChannels = options.alpha ? 4 : 3;
+  const videoFrames = options.video ? startVideoFrames(videoChannels) : null;
+
   for (let batchStart = 0; batchStart < options.frames; batchStart += batchSize) {
     const batchEnd = Math.min(batchStart + batchSize, options.frames);
     const batchFrames = batchEnd - batchStart;
@@ -549,69 +626,25 @@ async function main() {
     let jobs;
     
     if (options.video) {
-      // Video input: extract batch of frames with ffmpeg
-      const ffmpegCmd = `ffmpeg -y -i "${options.video}" -vf "select='between(n\\,${batchStart}\\,${batchEnd - 1})',scale=${options.width}:${options.height}" -vsync vfr "${path.join(batchDir, 'frame_%06d.png')}" 2>/dev/null`;
-      
-      try {
-        execSync(ffmpegCmd, { stdio: 'pipe' });
-      } catch (e) {
-        console.error(`\n❌ Failed to extract frames ${batchStart}-${batchEnd}`);
-        fs.closeSync(fd);
-        fs.rmSync(tempDir, { recursive: true });
-        process.exit(1);
-      }
-      
-      // Get extracted frame files
-      const frameFiles = fs.readdirSync(batchDir)
-        .filter(f => f.endsWith('.png'))
-        .sort();
-      
-      // Build job list for parallel processing
-      if (options.alpha && sharp) {
-        // Premultiply alpha for each extracted frame
-        jobs = await Promise.all(frameFiles.map(async (f, j) => {
-          const srcPath = path.join(batchDir, f);
-          const premultPath = path.join(batchDir, `premult_${j}.png`);
-          
-          // Read image with ensureAlpha
-          const rawBuffer = await sharp(srcPath)
-            .ensureAlpha()
-            .raw()
-            .toBuffer({ resolveWithObject: true });
-          
-          const { data, info } = rawBuffer;
-          
-          // Manual premultiplication: RGB * alpha
-          const premultiplied = Buffer.alloc(data.length);
-          for (let p = 0; p < data.length; p += 4) {
-            const a = data[p + 3] / 255;
-            premultiplied[p + 0] = Math.round(data[p + 0] * a);
-            premultiplied[p + 1] = Math.round(data[p + 1] * a);
-            premultiplied[p + 2] = Math.round(data[p + 2] * a);
-            premultiplied[p + 3] = data[p + 3];
-          }
-          
-          await sharp(premultiplied, {
-            raw: { width: info.width, height: info.height, channels: 4 }
-          }).png().toFile(premultPath);
-          
-          // Delete original extracted frame
-          fs.unlinkSync(srcPath);
-          
-          return {
-            index: j,
-            pngPath: premultPath,
-            astcPath: path.join(batchDir, `frame_${j}.astc`),
-            deleteAfter: true
-          };
-        }));
-      } else {
-        jobs = frameFiles.map((f, j) => ({
+      jobs = [];
+      for (let j = 0; j < batchFrames; j++) {
+        const pixels = await videoFrames.read();
+        if (!pixels) {
+          const detail = videoFrames.errorText();
+          console.error(`\n❌ ffmpeg stopped after ${batchStart + j} of ${options.frames} frames${detail ? `: ${detail}` : ''}`);
+          fs.closeSync(fd);
+          fs.rmSync(tempDir, { recursive: true });
+          process.exit(1);
+        }
+        if (options.alpha) premultiplyBgra(pixels);
+        const imagePath = path.join(batchDir, `frame_${j}.tga`);
+        writeTga(imagePath, pixels, options.width, options.height, videoChannels);
+        jobs.push({
           index: j,
-          pngPath: path.join(batchDir, f),
+          imagePath,
           astcPath: path.join(batchDir, `frame_${j}.astc`),
-          deleteAfter: true  // Delete extracted frames after encoding
-        }));
+          deleteAfter: true
+        });
       }
     } else {
       // PNG input: use files directly from input directory
@@ -646,7 +679,7 @@ async function main() {
           
           return {
             index: j,
-            pngPath: premultPath,
+            imagePath: premultPath,
             astcPath: path.join(batchDir, `frame_${j}.astc`),
             deleteAfter: true  // Delete premultiplied temp files
           };
@@ -654,7 +687,7 @@ async function main() {
       } else {
         jobs = batchFiles.map((pngPath, j) => ({
           index: j,
-          pngPath: pngPath,
+          imagePath: pngPath,
           astcPath: path.join(batchDir, `frame_${j}.astc`),
           deleteAfter: false  // Don't delete source PNG files
         }));
@@ -687,7 +720,7 @@ async function main() {
       // Write to KTX2 (directly or through zstd)
       if (useInnerCompression && zstdProcess) {
         // Pipe through zstd - it will write compressed data to fd via stdout handler
-        zstdProcess.stdin.write(astcPayload);
+        if (!zstdProcess.stdin.write(astcPayload)) await once(zstdProcess.stdin, 'drain');
       } else {
         fs.writeSync(fd, astcPayload);
       }
@@ -695,7 +728,7 @@ async function main() {
       // Cleanup: delete ASTC file, and PNG only if extracted from video
       fs.unlinkSync(astcPath);
       if (job.deleteAfter) {
-        fs.unlinkSync(job.pngPath);
+        fs.unlinkSync(job.imagePath);
       }
       
       framesProcessed++;
@@ -708,6 +741,16 @@ async function main() {
     fs.rmSync(batchDir, { recursive: true });
   }
   
+  if (videoFrames) {
+    const code = await videoFrames.finish();
+    if (code !== 0) {
+      console.error(`\n❌ ffmpeg exited with code ${code}: ${videoFrames.errorText()}`);
+      fs.closeSync(fd);
+      fs.rmSync(tempDir, { recursive: true });
+      process.exit(1);
+    }
+  }
+
   console.log('\n✓ All frames encoded');
   
   // For inner compression: close zstd stdin, wait for completion, patch header

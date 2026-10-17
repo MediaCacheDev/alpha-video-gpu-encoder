@@ -1,13 +1,13 @@
 # alpha-video-gpu-encoder
 
-Encodes video files and PNG sequences into ASTC texture arrays in KTX2 files for [alpha-video-gpu](https://github.com/danielkpl2/alpha-video-gpu).
+Encodes video files and PNG sequences into ASTC texture arrays in KTX2 files for [alpha-video-gpu](https://github.com/MediaCacheDev/alpha-video-gpu).
 
 ## What It Does
 
 1. **Extracts frames** from video files (MP4, MOV, etc.) or reads PNG sequences
 2. **Encodes to ASTC** using `toktx` (KTX-Software) or `astcenc` (ARM)
 3. **Packs into KTX2** texture arrays with optional zstd supercompression
-4. **Injects animation metadata** (`BasisPlayerMetadata`) into the KTX2 key-value data
+4. **Injects video metadata** (`BasisPlayerMetadata`) into the KTX2 key-value data
 5. **Supports streaming** - constant memory playback regardless of video length
 
 ## Terminology
@@ -17,7 +17,7 @@ Encodes video files and PNG sequences into ASTC texture arrays in KTX2 files for
 | **KTX2** | Khronos Texture 2.0 | Container format for GPU-compressed textures. Stores texture data with metadata, supports mipmaps, texture arrays, and internal compression. Think of it as "MP4 for textures". |
 | **ASTC** | Adaptive Scalable Texture Compression | GPU texture compression format developed by ARM. Supported natively on all modern mobile GPUs (iOS, Android) and Apple Silicon Macs. Offers configurable quality/size tradeoff via block sizes (4x4 to 12x12). |
 | **Zstd** | Zstandard | Fast lossless compression algorithm by Facebook. Used to compress ASTC data for smaller file sizes. Decompresses at ~1GB/s on modern hardware. |
-| **Texture Array** | 2D Texture Array | GPU feature that stores multiple 2D images as layers in a single texture. Each animation frame is one layer. More efficient than individual textures. |
+| **Texture Array** | 2D Texture Array | GPU feature that stores multiple 2D images as layers in a single texture. Each video frame is one layer. More efficient than individual textures. |
 | **astcenc** | ASTC Encoder | ARM's official ASTC compression tool. Used by the stream encoder for memory-efficient encoding. |
 | **toktx** | To KTX | KTX-Software's tool for creating KTX2 files. Used for the default ASTC encode. |
 | **Premultiplied Alpha** | - | Alpha blending technique where RGB values are pre-multiplied by alpha. Prevents dark "halo" artifacts around transparent edges. This encoder always premultiplies when alpha is enabled. |
@@ -35,9 +35,9 @@ ASTC divides images into fixed-size blocks and compresses each block to exactly 
 | **10x10** | 100 | 1.28 bpp | ~16% | Acceptable - visible on detailed content |
 | **12x12** | 144 | 0.89 bpp | ~11% | Low - only for simple graphics |
 
-**How it works:** ASTC is adaptive - it analyzes each block and chooses the best encoding strategy. For smooth gradients (common in animations and effects), larger blocks work well because there's less high-frequency detail to preserve. For sharp edges or fine text, smaller blocks are needed.
+**How it works:** ASTC is adaptive - it analyzes each block and chooses the best encoding strategy. For smooth gradients (common in UI video and effects), larger blocks work well because there's less high-frequency detail to preserve. For sharp edges or fine text, smaller blocks are needed.
 
-**Recommendation:** Start with **6x6** for animated content with alpha. It offers ~56% file size reduction with virtually no visible quality loss for most use cases. Drop to **8x8** for even smaller files if quality is acceptable. Use **4x4** (the default) when you need maximum quality for detailed content.
+**Recommendation:** Start with **6x6** for video with alpha. It offers ~56% file size reduction with virtually no visible quality loss for most use cases. Drop to **8x8** for even smaller files if quality is acceptable. Use **4x4** (the default) when you need maximum quality for detailed content.
 
 ## Why GPU Textures Instead of Video Codecs?
 
@@ -87,7 +87,7 @@ KTX2 File → Zstd Decompress → ASTC Data → Direct GPU Upload → Render
 | Use Case | Recommendation |
 |----------|----------------|
 | Single long video | Video codec (smaller files) |
-| Many UI animations | GPU texture (low CPU) |
+| Many UI videos | GPU texture (low CPU) |
 | Stickers/effects | GPU texture (many concurrent) |
 | Battery-critical | GPU texture |
 | Bandwidth-critical | Video codec |
@@ -126,7 +126,7 @@ The encoder drives external tools. Install the ones your workflow needs:
 | Tool | Needed for | Install (macOS) |
 |------|-----------|-----------------|
 | `toktx` (KTX-Software) | Default encode path | `brew install ktx` |
-| `ffmpeg` + `ffprobe` | `--video` input and dimension probing | `brew install ffmpeg` |
+| `ffmpeg` + `ffprobe` (5.1 or newer) | `--video` input and dimension probing | `brew install ffmpeg` |
 | `zstd` | `--zstd` above 0 with the stream encoder | `brew install zstd` |
 | `astcenc` (ARM) | `--use-stream-encoder` and `texenc-stream` | See below |
 
@@ -165,12 +165,12 @@ lists each tool with its version or an install hint, and what it is needed for. 
 
 | Goal | Encode | Play with |
 |------|--------|-----------|
-| Short UI animation in an app | `texenc -i ./frames -o anim.ktx2` | the defaults (all frames loaded) |
-| Long animation, constant memory | `texenc -i ./frames -o anim.ktx2` | `stream` |
-| Many players on screen, lowest CPU | `texenc -i ./frames -o anim.ktx2 --zstd 0` | `stream` (memory-mapped, no decompression) |
-| Smaller file, softer detail | `texenc -i ./frames -o anim.ktx2 --astc-block 6x6` | the defaults |
-| Opaque content | `texenc -i ./frames -o anim.ktx2 --no-alpha` | the defaults |
-| Long or large video, little RAM | `texenc -v in.mp4 -o anim.ktx2 --frame-count 900 --use-stream-encoder` | `stream` |
+| Short UI video in an app | `texenc -i ./frames -o video.ktx2` | the defaults (all frames loaded) |
+| Long video, constant memory | `texenc -i ./frames -o video.ktx2` | `stream` |
+| Many players on screen, lowest CPU | `texenc -i ./frames -o video.ktx2 --zstd 0` | `stream` (memory-mapped, no decompression) |
+| Smaller file, softer detail | `texenc -i ./frames -o video.ktx2 --astc-block 6x6` | the defaults |
+| Opaque content | `texenc -i ./frames -o video.ktx2 --no-alpha` | the defaults |
+| Long or large video, little RAM | `texenc -v in.mp4 -o video.ktx2 --frame-count 900 --use-stream-encoder` | `stream` |
 
 `--fps` defaults to 30. "Play with" names the `alpha-video-gpu` props; see its README for the memory options.
 
@@ -329,7 +329,14 @@ Run `texenc-stream --help` for all options.
 
 ## Playback
 
-Play the output with [alpha-video-gpu](https://github.com/danielkpl2/alpha-video-gpu) (React Native and web).
+Play the output with [alpha-video-gpu](https://github.com/MediaCacheDev/alpha-video-gpu) (React Native, Android, iOS and web).
+
+## Demo and related packages
+
+[alpha-video-test](https://github.com/MediaCacheDev/alpha-video-test) is a React Native app (Android, iOS and web) that plays the same video as KTX2/ASTC, WebM, APNG and AVIF side by side, with FPS, CPU and memory readouts.
+
+- [alpha-video-gpu](https://github.com/MediaCacheDev/alpha-video-gpu): the player for this encoder's files.
+- [alpha-video](https://github.com/MediaCacheDev/alpha-video): WebM VP9 and AV1 with alpha, for when file size matters more than CPU use.
 
 ## License
 

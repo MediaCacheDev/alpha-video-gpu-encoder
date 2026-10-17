@@ -492,6 +492,10 @@ async function encodeFrames() {
       if (zstdLevel > 0) {
         streamArgs.push('--zstd', zstdLevel.toString());
       }
+
+      if (hasAlpha) {
+        streamArgs.push('--alpha');
+      }
       
       console.log(`\n📦 Encoding ${frameCount} frames to KTX2...`);
       

@@ -30,12 +30,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danielkpl2/alpha-video-gpu-encoder.git"
+    "url": "git+https://github.com/MediaCacheDev/alpha-video-gpu-encoder.git"
   },
   "bugs": {
-    "url": "https://github.com/danielkpl2/alpha-video-gpu-encoder/issues"
+    "url": "https://github.com/MediaCacheDev/alpha-video-gpu-encoder/issues"
   },
-  "homepage": "https://github.com/danielkpl2/alpha-video-gpu-encoder#readme",
+  "homepage": "https://github.com/MediaCacheDev/alpha-video-gpu-encoder#readme",
   "dependencies": {
     "commander": "^14.0.2",
     "sharp": "^0.34.5"
