@@ -30,7 +30,7 @@ const path = require('path');
 const { execSync, spawn } = require('child_process');
 const { once } = require('events');
 const os = require('os');
-const { resolveAstcenc, defaultParallelism, exitUnlessToolFound, INSTALL_HINTS } = require('./tools');
+const { resolveAstcenc, defaultParallelism, exitUnlessToolFound, alphaDecoderArgs, INSTALL_HINTS } = require('./tools');
 const { LevelCompressor, layersPerSeekPoint } = require('./zstd-level');
 const {
   DFD_FLAG_ALPHA_PREMULTIPLIED, parseFrameRate, formatFrameRate, probeFrameRate, kvdEntry, animDataValue, compareKeys,
@@ -443,6 +443,7 @@ function buildKVD() {
 function startVideoFrames(channels) {
   const ffmpeg = spawn('ffmpeg', [
     '-v', 'error',
+    ...(channels === 4 ? alphaDecoderArgs(options.video) : []),
     '-i', options.video,
     '-an',
     '-vf', `scale=${options.width}:${options.height}`,

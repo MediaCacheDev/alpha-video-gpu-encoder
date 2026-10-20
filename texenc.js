@@ -15,7 +15,7 @@
  * `texenc doctor` checks the external tools instead of encoding.
  */
 
-const { resolveAstcenc, defaultParallelism, exitUnlessToolFound, INSTALL_HINTS, runDoctor } = require('./tools');
+const { resolveAstcenc, defaultParallelism, exitUnlessToolFound, alphaDecoderArgs, INSTALL_HINTS, runDoctor } = require('./tools');
 const {
   DFD_FLAGS_OFFSET, DFD_FLAG_ALPHA_PREMULTIPLIED, parseFrameRate, formatFrameRate, probeFrameRate,
   kvdEntry, animDataValue, compareKeys,
@@ -583,7 +583,8 @@ async function encodeFrames() {
     
     // Extract frames with ffmpeg
     // Using PNG format for lossless extraction
-    const ffmpegCmd = `ffmpeg -i "${videoInput}" -vf "scale=${frameWidth}:${frameHeight}" -frames:v ${frameCount} "${path.join(videoTempDir, 'frame_%06d.png')}"`;
+    const decoderArgs = hasAlpha ? alphaDecoderArgs(videoInput).join(' ') : '';
+    const ffmpegCmd = `ffmpeg ${decoderArgs} -i "${videoInput}" -vf "scale=${frameWidth}:${frameHeight}" -frames:v ${frameCount} "${path.join(videoTempDir, 'frame_%06d.png')}"`;
     
     try {
       console.log(`   Running ffmpeg...`);

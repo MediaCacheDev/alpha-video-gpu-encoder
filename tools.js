@@ -133,4 +133,29 @@ function runDoctor({ toktx = 'toktx', astcenc } = {}) {
   return checks.every(check => !check.required || check.version);
 }
 
-module.exports = { resolveAstcenc, defaultParallelism, exitUnlessToolFound, INSTALL_HINTS, runDoctor };
+const LIBVPX_DECODERS = { vp8: 'libvpx', vp9: 'libvpx-vp9' };
+
+/**
+ * ffmpeg input options that keep a WebM's alpha: `['-c:v', 'libvpx-vp9']` for VP9 with alpha,
+ * `['-c:v', 'libvpx']` for VP8 with alpha, otherwise none. ffmpeg's own VP8 and VP9 decoders
+ * ignore the alpha that WebM carries alongside each frame, and would give opaque frames.
+ */
+function alphaDecoderArgs(videoPath) {
+  const result = spawnSync('ffprobe', [
+    '-v', 'error', '-select_streams', 'v:0',
+    '-show_entries', 'stream=codec_name:stream_tags=alpha_mode', '-of', 'json', videoPath,
+  ], { encoding: 'utf8' });
+  if (result.status !== 0) return [];
+  let stream;
+  try {
+    stream = JSON.parse(result.stdout).streams?.[0];
+  } catch {
+    return [];
+  }
+  const decoder = LIBVPX_DECODERS[stream?.codec_name];
+  const hasAlpha = Object.entries(stream?.tags || {})
+    .some(([key, value]) => key.toLowerCase() === 'alpha_mode' && value === '1');
+  return decoder && hasAlpha ? ['-c:v', decoder] : [];
+}
+
+module.exports = { resolveAstcenc, defaultParallelism, exitUnlessToolFound, alphaDecoderArgs, INSTALL_HINTS, runDoctor };
