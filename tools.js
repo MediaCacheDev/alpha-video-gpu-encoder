@@ -74,11 +74,25 @@ function probeVersion(command, args) {
 }
 
 const INSTALL_HINTS = {
-  toktx: 'KTX-Software: brew install ktx (macOS), or https://github.com/KhronosGroup/KTX-Software/releases',
-  astcenc: 'https://github.com/ARM-software/astc-encoder/releases (or brew install astc-encoder); put it on PATH or set $ASTCENC',
-  ffmpeg: 'brew install ffmpeg (macOS) or apt install ffmpeg (Linux)',
+  toktx: 'Install KTX-Software from https://github.com/KhronosGroup/KTX-Software/releases (.pkg on macOS, .deb, .rpm or .tar.bz2 on Linux), or pass --toktx <path>',
+  astcenc: 'Download from https://github.com/ARM-software/astc-encoder/releases, then put it on PATH, set $ASTCENC, or pass --astcenc <path>',
+  ffmpeg: 'brew install ffmpeg (macOS) or apt install ffmpeg (Linux); 5.1 or newer',
+  ffprobe: 'Comes with ffmpeg: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)',
   zstd: 'brew install zstd (macOS) or apt install zstd (Linux)',
 };
+
+function isToolFound(command) {
+  return command.includes('/') || command.includes('\\') ? isExecutableFile(command) : findOnPath(command) !== null;
+}
+
+/** Exits with an install hint unless `command` (a name on PATH or a path) is found. */
+function exitUnlessToolFound(name, usedFor, command = name) {
+  if (isToolFound(command)) return;
+  console.error(`❌ ${name} not found${command !== name ? `: ${command}` : ' on PATH'}, needed for ${usedFor}`);
+  console.error(`   ${INSTALL_HINTS[name]}`);
+  console.error('   Run texenc doctor to check every tool');
+  process.exit(1);
+}
 
 /** Prints which tools are installed and what each is for. Returns false if the default path can't run. */
 function runDoctor({ toktx = 'toktx', astcenc } = {}) {
@@ -97,7 +111,7 @@ function runDoctor({ toktx = 'toktx', astcenc } = {}) {
       version: astcencPath ? probeVersion(astcencPath, ['-version']) : null, hint: INSTALL_HINTS.astcenc },
     { name: 'ffmpeg', usedFor: '--video input', version: probeVersion('ffmpeg', ['-version']), hint: INSTALL_HINTS.ffmpeg },
     { name: 'ffprobe', usedFor: '--video input, and frame sizes for the stream encoder',
-      version: probeVersion('ffprobe', ['-version']), hint: INSTALL_HINTS.ffmpeg },
+      version: probeVersion('ffprobe', ['-version']), hint: INSTALL_HINTS.ffprobe },
     { name: 'zstd', usedFor: 'compression in the stream encoder',
       version: probeVersion('zstd', ['--version']), hint: INSTALL_HINTS.zstd },
     { name: 'sharp', usedFor: 'reading PNG frames (an npm dependency)', required: true,
@@ -119,4 +133,4 @@ function runDoctor({ toktx = 'toktx', astcenc } = {}) {
   return checks.every(check => !check.required || check.version);
 }
 
-module.exports = { resolveAstcenc, defaultParallelism, runDoctor };
+module.exports = { resolveAstcenc, defaultParallelism, exitUnlessToolFound, INSTALL_HINTS, runDoctor };

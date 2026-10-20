@@ -6,17 +6,16 @@
  * Converts PNG frames or video to a KTX2 file holding an ASTC texture array
  * (one frame per layer), with KTX2 internal zstd supercompression by default.
  * 
- * Prerequisites:
- * - npm install sharp commander
- * - Install toktx (KTX-Software): brew install ktx (macOS)
- *   Or download from: https://github.com/KhronosGroup/KTX-Software/releases
- * 
- * Output: animation.ktx2
+ * Prerequisites (README "Prerequisites" has the install commands):
+ * - toktx (KTX-Software) for the default encoder:
+ *   https://github.com/KhronosGroup/KTX-Software/releases
+ * - astcenc for --use-stream-encoder: https://github.com/ARM-software/astc-encoder/releases
+ * - ffmpeg and ffprobe for --video, zstd for seek points and the stream encoder's --zstd
  *
  * `texenc doctor` checks the external tools instead of encoding.
  */
 
-const { resolveAstcenc, defaultParallelism, runDoctor } = require('./tools');
+const { resolveAstcenc, defaultParallelism, exitUnlessToolFound, INSTALL_HINTS, runDoctor } = require('./tools');
 const { compressLevelData, layersPerSeekPoint } = require('./zstd-level');
 
 // Before requiring sharp, so the doctor can report it missing.
@@ -242,6 +241,7 @@ async function encodeTextureArray(opts) {
   const bytesPerLayer = astcBytesPerLayer(frameWidth, frameHeight, astcBlock);
   const seekLayers = zstdLevel > 0 ? layersPerSeekPoint(seekInterval, bytesPerLayer) : 0;
   const addSeekPoints = seekLayers > 0 && seekLayers < frameCount;
+  if (addSeekPoints) exitUnlessToolFound('zstd', `seek points (clips over --seek-interval ${seekInterval} MB)`);
   const outputDir = path.dirname(outputBase);
   const baseName = path.basename(outputBase);
 
@@ -423,8 +423,7 @@ const options = program.opts();
 function exitUnlessAstcencFound(astcencPath) {
   if (astcencPath && fs.existsSync(astcencPath)) return;
   console.error(`❌ astcenc not found${astcencPath ? `: ${astcencPath}` : ' (looked at --astcenc, $ASTCENC and PATH)'}`);
-  console.error('   Download from: https://github.com/ARM-software/astc-encoder/releases');
-  console.error('   Then put it on PATH, set $ASTCENC, or pass --astcenc <path>');
+  console.error(`   ${INSTALL_HINTS.astcenc}`);
   process.exit(1);
 }
 
@@ -458,6 +457,8 @@ async function encodeFrames() {
   
   if (useStreamEncoder) {
     exitUnlessAstcencFound(astcencPath);
+  } else {
+    exitUnlessToolFound('toktx', 'the default encoder (--use-stream-encoder uses astcenc instead)', toktxPath);
   }
 
   // Validate input - either --input or --video required
@@ -482,6 +483,8 @@ async function encodeFrames() {
       console.error(`❌ Video file not found: ${videoInput}`);
       process.exit(1);
     }
+    exitUnlessToolFound('ffmpeg', '--video input');
+    exitUnlessToolFound('ffprobe', '--video input');
     
     const frameCount = options.frameCount ? parseInt(options.frameCount) : null;
     if (!frameCount) {

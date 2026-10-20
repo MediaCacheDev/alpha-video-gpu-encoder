@@ -129,35 +129,61 @@ This installs two commands: `texenc` (the main CLI) and `texenc-stream` (the mem
 
 ### Prerequisites
 
-The encoder drives external tools. Install the ones your workflow needs:
+The encoder runs external tools. Install the ones your workflow needs:
 
-| Tool | Needed for | Install (macOS) |
-|------|-----------|-----------------|
-| `toktx` (KTX-Software) | Default encode path | `brew install ktx` |
-| `ffmpeg` + `ffprobe` (5.1 or newer) | `--video` input and dimension probing | `brew install ffmpeg` |
-| `zstd` | `--zstd` above 0 with the stream encoder, and seek points (clips over `--seek-interval`) | `brew install zstd` |
-| `astcenc` (ARM) | `--use-stream-encoder` and `texenc-stream` | See below |
+| Tool | Needed for | Tested with |
+|------|-----------|-------------|
+| `toktx` (KTX-Software) | The default encoder (without `--use-stream-encoder`) | 4.4.2 |
+| `astcenc` (ARM) | `--use-stream-encoder` and `texenc-stream` | 5.7.0 |
+| `ffmpeg` and `ffprobe` (5.1 or newer) | `--video` input, and detecting frame sizes | 8.0 |
+| `zstd` | `--zstd` above 0 with the stream encoder, and seek points (clips over `--seek-interval`) | 1.5.7 |
 
-### Optional: astcenc for the stream encoder
+Neither `toktx` nor `astcenc` is in Homebrew, so the commands below take both from their projects' GitHub releases.
 
-Download a release from [ARM-software/astc-encoder](https://github.com/ARM-software/astc-encoder/releases):
+#### macOS
 
 ```bash
-# macOS (universal)
-curl -sL "https://github.com/ARM-software/astc-encoder/releases/download/5.3.0/astcenc-5.3.0-macos-universal.zip" -o astcenc.zip
-unzip astcenc.zip -d astcenc-sdk
+brew install ffmpeg zstd
 
-# Linux (x64)
-curl -sL "https://github.com/ARM-software/astc-encoder/releases/download/5.3.0/astcenc-5.3.0-linux-x64.zip" -o astcenc.zip
+# toktx: KTX-Software's installer puts it in /usr/local/bin (Intel Macs: the Darwin-x86_64 package)
+curl -LO https://github.com/KhronosGroup/KTX-Software/releases/download/v4.4.2/KTX-Software-4.4.2-Darwin-arm64.pkg
+sudo installer -pkg KTX-Software-4.4.2-Darwin-arm64.pkg -target /
+
+# astcenc: a universal binary in astcenc-sdk/bin/astcenc
+curl -L https://github.com/ARM-software/astc-encoder/releases/download/5.7.0/astcenc-5.7.0-macos-universal.zip -o astcenc.zip
 unzip astcenc.zip -d astcenc-sdk
 ```
 
-The encoders look for astcenc in this order: `--astcenc <path>`, the `ASTCENC` environment variable, then `astcenc` on `PATH` (also `astcenc-native`, `-neon`, `-avx2`, `-sse4.1` and `-sse2`, the names in ARM's release zips). For the zips above, either add `astcenc-sdk/bin` to `PATH` or point at the binary:
+#### Linux
 
 ```bash
+sudo apt install ffmpeg zstd    # Ubuntu 24.04 or Debian 12 and newer ship ffmpeg 5.1 or newer
+
+# toktx (arm64: the Linux-arm64 package; Fedora: the .rpm; elsewhere: the .tar.bz2)
+curl -LO https://github.com/KhronosGroup/KTX-Software/releases/download/v4.4.2/KTX-Software-4.4.2-Linux-x86_64.deb
+sudo apt install ./KTX-Software-4.4.2-Linux-x86_64.deb
+
+# astcenc (arm64: astcenc-5.7.0-linux-arm64.zip)
+curl -L https://github.com/ARM-software/astc-encoder/releases/download/5.7.0/astcenc-5.7.0-linux-x64.zip -o astcenc.zip
+unzip astcenc.zip -d astcenc-sdk
+```
+
+Older distributions ship an ffmpeg older than 5.1 (Ubuntu 22.04 has 4.4); use a build from [ffmpeg.org/download](https://ffmpeg.org/download.html) instead.
+
+#### Finding astcenc
+
+ARM's zips name the binary after the instruction set it was built for: `astcenc` (macOS universal), `astcenc-avx2`, `-sse4.1` and `-sse2` (Linux x64), and `astcenc-neon` (Linux arm64). The encoders look for astcenc in this order: `--astcenc <path>`, the `ASTCENC` environment variable, then the first of `astcenc`, `astcenc-native`, `-neon`, `-avx2`, `-sse4.1` and `-sse2` found on `PATH`. Either add `astcenc-sdk/bin` to `PATH` or point at the binary:
+
+```bash
+export PATH="$PWD/astcenc-sdk/bin:$PATH"
+# or
 export ASTCENC="$PWD/astcenc-sdk/bin/astcenc"        # macOS
 export ASTCENC="$PWD/astcenc-sdk/bin/astcenc-avx2"   # Linux x64
 ```
+
+#### Windows
+
+Untested. The same releases have Windows builds: KTX-Software's `.exe` installer and astcenc's `windows-x64` zip, alongside ffmpeg and zstd for Windows.
 
 ### Checking the setup
 

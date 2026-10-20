@@ -4,6 +4,11 @@
 // Uses astcenc CLI to compress each frame individually
 // Memory usage: ~50MB per frame instead of all frames at once
 //
+// Prerequisites (README "Prerequisites" has the install commands):
+// - astcenc: https://github.com/ARM-software/astc-encoder/releases, on PATH, in $ASTCENC or via --astcenc
+// - ffmpeg for --video; ffprobe unless --width, --height (and --frames for video) are given
+// - zstd for --zstd
+//
 // Usage:
 //   node texenc-stream.js \
 //     --video input.mp4 \
@@ -25,7 +30,7 @@ const path = require('path');
 const { execSync, spawn } = require('child_process');
 const { once } = require('events');
 const os = require('os');
-const { resolveAstcenc, defaultParallelism } = require('./tools');
+const { resolveAstcenc, defaultParallelism, exitUnlessToolFound, INSTALL_HINTS } = require('./tools');
 const { LevelCompressor, layersPerSeekPoint } = require('./zstd-level');
 let sharp = null;  // Lazy-loaded for alpha premultiplication
 
@@ -114,10 +119,14 @@ if (!(options.seekInterval >= 0)) {
 options.astcenc = resolveAstcenc(options.astcenc);
 if (!options.astcenc || !fs.existsSync(options.astcenc)) {
   console.error(`❌ astcenc not found${options.astcenc ? `: ${options.astcenc}` : ' (looked at --astcenc, $ASTCENC and PATH)'}`);
-  console.error('   Download from: https://github.com/ARM-software/astc-encoder/releases');
-  console.error('   Then put it on PATH, set $ASTCENC, or pass --astcenc <path>');
+  console.error(`   ${INSTALL_HINTS.astcenc}`);
   process.exit(1);
 }
+if (options.video) exitUnlessToolFound('ffmpeg', '--video input');
+if (!options.width || !options.height || (options.video && !options.frames)) {
+  exitUnlessToolFound('ffprobe', 'detecting the frame size and count (or pass --width, --height and --frames)');
+}
+if (options.zstd > 0) exitUnlessToolFound('zstd', '--zstd');
 
 // Premultiplying PNG input needs sharp; video frames arrive from ffmpeg as raw pixels
 if (options.alpha && options.input) {

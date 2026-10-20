@@ -15,6 +15,6 @@ First public release.
   - Without `--alpha`, video frames are encoded opaque. Before, a source with an alpha channel kept it, not premultiplied.
   - `texenc --use-stream-encoder` passes `--alpha` for video as it does for PNGs, so alpha video is premultiplied, as the metadata says.
   - Premultiplying video frames no longer needs sharp.
-- `texenc doctor` lists the tools it found (toktx, astcenc, ffmpeg, ffprobe, zstd and sharp), with versions or install hints.
+- `texenc doctor` lists the tools it found (toktx, astcenc, ffmpeg, ffprobe, zstd and sharp), with versions or install hints. Both encoders check for the tools a run needs before starting, and stop with an install hint when one is missing.
 - astcenc is found through `--astcenc`, then `$ASTCENC`, then `PATH`, including the CPU-specific names in ARM's release zips.
 - Output passes `ktx validate`: uncompressed level data starts on a 16-byte boundary, and supercompressed level data follows the metadata with no padding.
