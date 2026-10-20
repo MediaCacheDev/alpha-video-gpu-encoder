@@ -16,6 +16,10 @@
  */
 
 const { resolveAstcenc, defaultParallelism, exitUnlessToolFound, INSTALL_HINTS, runDoctor } = require('./tools');
+const {
+  DFD_FLAGS_OFFSET, DFD_FLAG_ALPHA_PREMULTIPLIED, parseFrameRate, formatFrameRate, probeFrameRate,
+  kvdEntry, animDataValue, compareKeys,
+} = require('./ktx2-keys');
 const { compressLevelData, layersPerSeekPoint } = require('./zstd-level');
 
 // Before requiring sharp, so the doctor can report it missing.
@@ -41,10 +45,10 @@ function lcm(a, b) {
 }
 
 /**
- * Inject custom metadata into a KTX2 file's key-value data section.
+ * Adds a key/value entry (value: a Buffer) to a KTX2 file's key-value data, in sorted order.
  * KTX2 format: https://github.khronos.org/KTX-Specification/
  */
-function injectKTX2Metadata(ktx2Path, key, value) {
+function injectKTX2KeyValue(ktx2Path, key, value) {
   const data = fs.readFileSync(ktx2Path);
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   
@@ -60,13 +64,8 @@ function injectKTX2Metadata(ktx2Path, key, value) {
   const levelCount = view.getUint32(40, true) || 1;
   const levelIndexSize = levelCount * 24; // 3 x uint64 per level
   
-  // Create new key-value entry
-  // Format: keyAndValueByteLength (uint32) + key (NUL-terminated) + value (NUL-terminated) + padding
-  const keyBytes = Buffer.from(key + '\0', 'utf8');
-  const valueBytes = Buffer.from(value + '\0', 'utf8');
-  const kvEntryLength = keyBytes.length + valueBytes.length;
-  const kvEntryPadding = (4 - (kvEntryLength % 4)) % 4;
-  const kvEntryTotalLength = 4 + kvEntryLength + kvEntryPadding; // 4 bytes for length prefix
+  const newEntryBuffer = kvdEntry(key, value);
+  const kvEntryTotalLength = newEntryBuffer.length;
   
   // New KVD section = old KVD + new entry
   const newKvdByteLength = kvdByteLength + kvEntryTotalLength;
@@ -140,20 +139,11 @@ function injectKTX2Metadata(ktx2Path, key, value) {
     kvdReadPos += totalEntrySize;
   }
   
-  // Add new entry
-  const newEntryBuffer = Buffer.alloc(kvEntryTotalLength);
-  const newEntryView = new DataView(newEntryBuffer.buffer);
-  newEntryView.setUint32(0, kvEntryLength, true);
-  keyBytes.copy(newEntryBuffer, 4);
-  valueBytes.copy(newEntryBuffer, 4 + keyBytes.length);
-  
   existingEntries.push({
     key: key,
     data: newEntryBuffer
   });
-  
-  // Sort entries by key (KTX2 requirement)
-  existingEntries.sort((a, b) => a.key.localeCompare(b.key));
+  existingEntries.sort((a, b) => compareKeys(a.key, b.key));
   
   // Write sorted entries
   let writePos = kvdByteOffset;
@@ -175,7 +165,14 @@ function injectKTX2Metadata(ktx2Path, key, value) {
   data.copy(newData, newLevelDataStart, oldLevelDataStart, data.length);
   
   fs.writeFileSync(ktx2Path, newData);
-  console.log(`   ✓ Injected metadata key "${key}" (${value.length} bytes)`);
+  console.log(`   ✓ Added key "${key}" (${value.length} bytes)`);
+}
+
+/** Sets KHR_DF_FLAG_ALPHA_PREMULTIPLIED in the DFD; toktx writes straight alpha. */
+function markAlphaPremultiplied(ktx2Path) {
+  const data = fs.readFileSync(ktx2Path);
+  data[data.readUInt32LE(48) + DFD_FLAGS_OFFSET] |= DFD_FLAG_ALPHA_PREMULTIPLIED;
+  fs.writeFileSync(ktx2Path, data);
 }
 
 function astcBytesPerLayer(width, height, astcBlock) {
@@ -353,22 +350,8 @@ async function encodeTextureArray(opts) {
       throw error;
     }
 
-    // Create and inject metadata
-    const metadata = {
-      version: 1,
-      type: 'BasisPlayerMetadata',
-      packingMode: 'array',
-      frameCount,
-      frameRate,
-      frameWidth,
-      frameHeight,
-      hasAlpha,
-      premultipliedAlpha: hasAlpha,  // Always premultiply when alpha is enabled
-      mode: 'astc',
-      layerCount: frameCount,
-    };
-
-    injectKTX2Metadata(ktx2OutputPath, 'BasisPlayerMetadata', JSON.stringify(metadata));
+    injectKTX2KeyValue(ktx2OutputPath, 'KTXanimData', animDataValue(frameRate));
+    if (hasAlpha) markAlphaPremultiplied(ktx2OutputPath);
 
     let seekPoints = 0;
     if (addSeekPoints) {
@@ -402,7 +385,7 @@ program
   .requiredOption('-o, --output <path>', 'Output path (written as .ktx2)')
   .option('-w, --width <pixels>', 'Frame width (auto-detected from input if not specified)')
   .option('-h, --height <pixels>', 'Frame height (auto-detected from input if not specified)')
-  .option('-f, --fps <number>', 'Frame rate', '30')
+  .option('-f, --fps <rate>', 'Frame rate: 30, 29.97 or 30000/1001 (default: the video\'s, else 30)')
   .option('--frame-count <number>', 'Number of frames to extract from video (required with --video)')
   .option('--astc-quality <level>', 'ASTC quality: fastest, fast, medium, thorough, exhaustive', 'thorough')
   .option('--astc-block <size>', 'ASTC block size: 4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6, 8x8, 10x5, 10x6, 10x8, 10x10, 12x10, 12x12', '4x4')
@@ -432,7 +415,6 @@ async function encodeFrames() {
 
   let frameWidth = options.width ? parseInt(options.width) : null;
   let frameHeight = options.height ? parseInt(options.height) : null;
-  const frameRate = parseFloat(options.fps);
   const toktxPath = options.toktx;
   const hasAlpha = options.alpha !== false;
   const astcQuality = options.astcQuality || 'thorough';
@@ -473,6 +455,18 @@ async function encodeFrames() {
     console.error('❌ Cannot use both --input and --video. Choose one.');
     process.exit(1);
   }
+
+  let frameRate = options.fps ? parseFrameRate(options.fps) : null;
+  if (options.fps && !frameRate) {
+    console.error(`❌ --fps must be a positive rate such as 30, 29.97 or 30000/1001 (got ${options.fps})`);
+    process.exit(1);
+  }
+  if (!frameRate && videoInput && fs.existsSync(videoInput)) {
+    exitUnlessToolFound('ffprobe', '--video input');
+    frameRate = probeFrameRate(videoInput);
+    if (!frameRate) console.error(`⚠️  Couldn't read the frame rate of ${videoInput}; using 30 (pass --fps to set it)`);
+  }
+  frameRate = frameRate || parseFrameRate(30);
 
   let frameFiles = [];
   let videoTempDir = null;
@@ -539,6 +533,7 @@ async function encodeFrames() {
         '--width', frameWidth.toString(),
         '--height', frameHeight.toString(),
         '--frames', frameCount.toString(),
+        '--fps', `${frameRate.timescale}/${frameRate.duration}`,
         '--block', astcBlock,
         '--quality', astcQuality,
         '--astcenc', astcencPath,
@@ -565,23 +560,6 @@ async function encodeFrames() {
         if (result.status !== 0) {
           throw new Error(`Stream encoder exited with code ${result.status}`);
         }
-        
-        // Inject metadata
-        console.log('\n📝 Injecting metadata...');
-        const metadata = {
-          version: 1,
-          frameRate: frameRate,
-          frameWidth: frameWidth,
-          frameHeight: frameHeight,
-          frameCount: frameCount,
-          hasAlpha: hasAlpha,
-          premultipliedAlpha: hasAlpha,  // Stream encoder always premultiplies when alpha is enabled
-          mode: 'astc',
-          packingMode: 'array',  // Required for player to recognize texture array
-          layerCount: frameCount,
-        };
-        
-        injectKTX2Metadata(ktx2OutputPath, 'BasisPlayerMetadata', JSON.stringify(metadata));
         
         const stats = fs.statSync(ktx2OutputPath);
         const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
@@ -658,7 +636,7 @@ async function encodeFrames() {
 
   console.log(`📁 Found ${frameFiles.length} PNG frames`);
   console.log(`📐 Frame size: ${frameWidth}x${frameHeight}`);
-  console.log(`🎬 Frame rate: ${frameRate} fps`);
+  console.log(`🎬 Frame rate: ${formatFrameRate(frameRate)} fps`);
   console.log(`🔲 Alpha: ${hasAlpha ? 'Yes' : 'No'}`);
   console.log(`🎯 ASTC block=${astcBlock}, quality=${astcQuality}${astcPerceptual ? ', perceptual' : ''}`);
   if (zstdLevel > 0) {
@@ -748,6 +726,7 @@ async function encodeFrames() {
       path.join(__dirname, 'texenc-stream.js'),
       '--input', inputDir,
       '--output', ktx2OutputPath,
+      '--fps', `${frameRate.timescale}/${frameRate.duration}`,
       '--block', astcBlock,
       '--quality', astcQuality,
       '--astcenc', astcencPath,
@@ -775,23 +754,6 @@ async function encodeFrames() {
       if (result.status !== 0) {
         throw new Error(`Stream encoder exited with code ${result.status}`);
       }
-      
-      // Inject metadata
-      console.log('\n📝 Injecting metadata...');
-      const metadata = {
-        version: 1,
-        frameRate: frameRate,
-        frameWidth: frameWidth,
-        frameHeight: frameHeight,
-        frameCount: frameFiles.length,
-        hasAlpha: hasAlpha,
-        premultipliedAlpha: hasAlpha,  // Stream encoder always premultiplies when alpha is enabled
-        mode: 'astc',
-        packingMode: 'array',
-        layerCount: frameFiles.length,
-      };
-      
-      injectKTX2Metadata(ktx2OutputPath, 'BasisPlayerMetadata', JSON.stringify(metadata));
       
       const stats = fs.statSync(ktx2OutputPath);
       const sizeMB = (stats.size / 1024 / 1024).toFixed(2);

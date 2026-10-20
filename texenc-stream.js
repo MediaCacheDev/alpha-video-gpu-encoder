@@ -32,6 +32,9 @@ const { once } = require('events');
 const os = require('os');
 const { resolveAstcenc, defaultParallelism, exitUnlessToolFound, INSTALL_HINTS } = require('./tools');
 const { LevelCompressor, layersPerSeekPoint } = require('./zstd-level');
+const {
+  DFD_FLAG_ALPHA_PREMULTIPLIED, parseFrameRate, formatFrameRate, probeFrameRate, kvdEntry, animDataValue, compareKeys,
+} = require('./ktx2-keys');
 let sharp = null;  // Lazy-loaded for alpha premultiplication
 
 // Parse command line arguments
@@ -43,6 +46,7 @@ const options = {
   width: null,  // Auto-detect from input
   height: null, // Auto-detect from input
   frames: null,
+  fps: null,  // Auto-detect from video, else 30
   block: '4x4',
   quality: 'fast',
   astcenc: null,  // --astcenc, else $ASTCENC, else astcenc on PATH
@@ -61,6 +65,7 @@ for (let i = 0; i < args.length; i++) {
   else if (arg === '--width' || arg === '-w') options.width = parseInt(args[++i]);
   else if (arg === '--height' || arg === '-h') options.height = parseInt(args[++i]);
   else if (arg === '--frames' || arg === '-f') options.frames = parseInt(args[++i]);
+  else if (arg === '--fps') options.fps = args[++i];
   else if (arg === '--block' || arg === '-b') options.block = args[++i];
   else if (arg === '--quality' || arg === '-q') options.quality = args[++i];
   else if (arg === '--astcenc') options.astcenc = args[++i];
@@ -82,6 +87,7 @@ Options:
   -w, --width <pixels>   Frame width (auto-detected from input)
   -h, --height <pixels>  Frame height (auto-detected from input)
   -f, --frames <count>   Number of frames to process (optional, auto-detected if omitted)
+  --fps <rate>           Frame rate: 30, 29.97 or 30000/1001 (default: the video's, else 30)
   -b, --block <NxN>      ASTC block size (default: 4x4)
   -q, --quality <level>  Quality: fastest,fast,medium,thorough,exhaustive (default: fast)
   -j, --parallel <N>     Parallel astcenc processes (default: performance cores on
@@ -123,10 +129,25 @@ if (!options.astcenc || !fs.existsSync(options.astcenc)) {
   process.exit(1);
 }
 if (options.video) exitUnlessToolFound('ffmpeg', '--video input');
-if (!options.width || !options.height || (options.video && !options.frames)) {
-  exitUnlessToolFound('ffprobe', 'detecting the frame size and count (or pass --width, --height and --frames)');
+if (!options.width || !options.height || (options.video && (!options.frames || !options.fps))) {
+  exitUnlessToolFound('ffprobe', 'detecting the frame size, count and rate (or pass --width, --height, --frames and --fps)');
 }
 if (options.zstd > 0) exitUnlessToolFound('zstd', '--zstd');
+
+let frameRate;
+if (options.fps) {
+  frameRate = parseFrameRate(options.fps);
+  if (!frameRate) {
+    console.error(`❌ --fps must be a positive rate such as 30, 29.97 or 30000/1001 (got ${options.fps})`);
+    process.exit(1);
+  }
+} else if (options.video) {
+  frameRate = probeFrameRate(options.video);
+  if (!frameRate) {
+    console.error(`⚠️  Couldn't read the frame rate of ${options.video}; using 30 (pass --fps to set it)`);
+  }
+}
+frameRate = frameRate || parseFrameRate(30);
 
 // Premultiplying PNG input needs sharp; video frames arrive from ffmpeg as raw pixels
 if (options.alpha && options.input) {
@@ -225,7 +246,7 @@ console.log('🚀 KTX2 Streaming Encoder (Memory Efficient)');
 console.log(`   Input: ${options.video || options.input}`);
 console.log(`   Output: ${options.output}`);
 console.log(`   Dimensions: ${options.width}x${options.height}`);
-console.log(`   Frames: ${options.frames}`);
+console.log(`   Frames: ${options.frames} at ${formatFrameRate(frameRate)} fps`);
 console.log(`   Alpha: ${options.alpha ? 'Yes (premultiplied)' : 'No'}`);
 console.log(`   ASTC block: ${options.block}`);
 console.log(`   Quality: ${options.quality}${options.perceptual ? ', perceptual' : ''}`);
@@ -328,7 +349,7 @@ function buildLevelIndex(byteOffset, byteLength, uncompressedByteLength = null) 
 }
 
 // Build DFD for ASTC (copied from libktx reference output)
-function buildASTCDFD(blockX, blockY) {
+function buildASTCDFD(blockX, blockY, premultiplied) {
   // DFD structure from libktx v4.4.2 for ASTC 4x4
   // Total size: 44 bytes
   const dfd = Buffer.alloc(44);
@@ -358,8 +379,8 @@ function buildASTCDFD(blockX, blockY) {
   // transferFunction (1 byte) - 1 = LINEAR
   dfd.writeUInt8(1, offset); offset += 1;
   
-  // flags (1 byte) - 0 = straight alpha
-  dfd.writeUInt8(0, offset); offset += 1;
+  // flags (1 byte) - premultiplied or straight alpha
+  dfd.writeUInt8(premultiplied ? DFD_FLAG_ALPHA_PREMULTIPLIED : 0, offset); offset += 1;
   
   // texelBlockDimension0 (1 byte) - blockX - 1
   dfd.writeUInt8(blockX - 1, offset); offset += 1;
@@ -408,23 +429,13 @@ function buildASTCDFD(blockX, blockY) {
   return dfd;
 }
 
-// Build minimal KVD section with KTXwriter key (required for valid KTX2)
+// KVD: KTXanimData (the frame timing) and KTXwriter (required for valid KTX2)
 function buildKVD() {
-  const key = 'KTXwriter';
-  const value = 'texenc-stream';
-  
-  const keyBytes = Buffer.from(key + '\0', 'utf8');
-  const valueBytes = Buffer.from(value + '\0', 'utf8');
-  const entryLength = keyBytes.length + valueBytes.length;
-  const entryPadding = (4 - (entryLength % 4)) % 4;
-  
-  const kvd = Buffer.alloc(4 + entryLength + entryPadding);
-  kvd.writeUInt32LE(entryLength, 0);
-  keyBytes.copy(kvd, 4);
-  valueBytes.copy(kvd, 4 + keyBytes.length);
-  // Padding bytes are already 0
-  
-  return kvd;
+  const entries = {
+    KTXanimData: animDataValue(frameRate),
+    KTXwriter: Buffer.from('texenc-stream\0', 'utf8'),
+  };
+  return Buffer.concat(Object.keys(entries).sort(compareKeys).map((key) => kvdEntry(key, entries[key])));
 }
 
 // One ffmpeg process decodes the whole input once and pipes raw BGR(A) frames, which are
@@ -509,7 +520,7 @@ async function main() {
   const headerSize = 80;
   const levelIndexSize = 24;
   const levelIndexOffset = headerSize;  // Where level index starts (for patching later)
-  const dfd = buildASTCDFD(blockX, blockY);
+  const dfd = buildASTCDFD(blockX, blockY, options.alpha);
   const kvd = buildKVD();
   
   const dfdOffset = headerSize + levelIndexSize;

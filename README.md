@@ -1,13 +1,13 @@
 # alpha-video-gpu-encoder
 
-Encodes video files and PNG sequences into ASTC texture arrays in KTX2 files for [alpha-video-gpu](https://github.com/MediaCacheDev/alpha-video-gpu).
+Encodes video files and image sequences into ASTC texture arrays in KTX2 files for [alpha-video-gpu](https://github.com/MediaCacheDev/alpha-video-gpu).
 
 ## What It Does
 
 1. **Extracts frames** from video files (MP4, MOV, etc.) or reads PNG sequences
 2. **Encodes to ASTC** using `toktx` (KTX-Software) or `astcenc` (ARM)
 3. **Packs into KTX2** texture arrays with optional zstd supercompression
-4. **Injects video metadata** (`BasisPlayerMetadata`) into the KTX2 key-value data
+4. **Records the frame rate** in KTX2's standard `KTXanimData` key, and marks the alpha as premultiplied
 5. **Supports streaming** - constant memory playback regardless of video length
 
 ## Terminology
@@ -39,70 +39,69 @@ ASTC divides images into fixed-size blocks and compresses each block to exactly 
 
 **Recommendation:** Start with **6x6** for video with alpha. It offers ~56% file size reduction with virtually no visible quality loss for most use cases. Drop to **8x8** for even smaller files if quality is acceptable. Use **4x4** (the default) when you need maximum quality for detailed content.
 
-## Why GPU Textures Instead of Video Codecs?
+## ASTC or a Video Codec?
 
-This encoder produces GPU texture streams, not video files. Here's why that matters:
-
-### Video Codec Pipeline (VP9, AV1)
+ASTC makes a different trade-off from VP9 and AV1. A video codec spends CPU on every frame to make the file as small as possible. ASTC is a format the GPU samples directly, so playback needs almost no CPU and leaves it free for the rest of the UI, even with many animations on screen. The cost is file size.
 
 ```
-Video File → CPU Decode → YUV/YUVA → Convert to RGBA → Upload to GPU → Render
-                │              │              │              │
-            Heavy CPU       Planar        Per-frame      640KB/frame
-            per frame       format        conversion     (400×400×4)
+VP9 / AV1:  file → decode on the CPU → YUV → convert to RGBA → upload → draw
+ASTC:       file → zstd (or nothing) → upload as is → draw (the GPU decodes while sampling)
 ```
 
-- **Excellent compression** (10-50x smaller than raw)
-- **High CPU per frame** - decode + color convert
-- **Battery drain** on mobile devices
-- **Alpha support** - VP9/AV1 only (YUVA)
+### Size and quality
 
-### GPU Texture Pipeline (ASTC)
+Two clips, decoded from the demo app's WebM files to PNG and encoded from those PNGs into each format. VP9 is a single stream with alpha (`libvpx-vp9 -crf <n> -b:v 0 -speed 0 -auto-alt-ref 0`, yuva420p). AV1 is two streams, colour and alpha (`libsvtav1 -crf <n> -preset 8`). ASTC is `texenc` with its defaults (`thorough`, perceptual, zstd 18) at each block size. PSNR is measured against the source over premultiplied RGBA, every frame. The sources are VP9 decodes, which may favour the VP9 re-encodes slightly.
 
-```
-KTX2 File → Zstd Decompress → ASTC Data → Direct GPU Upload → Render
-                │                  │              │
-            ~1GB/s CPU         Already GPU     71KB/frame
-            (trivial)           format        (400×400×0.44)
-```
+**Glow:** 400×400, 181 frames, 30 fps, mostly transparent.
 
-- **Moderate compression** (3-10x smaller than raw)
-- **Near-zero CPU** - Zstd is trivial, GPU does ASTC decompression
-- **Minimal battery drain**
-- **Native alpha** - ASTC includes alpha channel
+| Format | Size | PSNR |
+|--------|-----:|-----:|
+| VP9, CRF 18 | 1.0 MB | 50.9 dB |
+| VP9, CRF 30 | 0.56 MB | 48.4 dB |
+| AV1, CRF 28 | 0.60 MB | 48.8 dB |
+| AV1, CRF 35 | 0.37 MB | 47.2 dB |
+| ASTC 4x4 | 5.5 MB | 53.0 dB |
+| ASTC 5x5 | 3.6 MB | 50.4 dB |
+| ASTC 6x6 | 2.5 MB | 49.1 dB |
+| ASTC 8x8 | 1.4 MB | 46.3 dB |
 
-### Comparison Table
+**Manta:** 1920×1080, 424 frames, 29.97 fps, mostly opaque moving footage.
 
-| Aspect | Video Codec (VP9/AV1) | GPU Texture (ASTC) |
-|--------|----------------------|-------------------|
-| **File size** | Smallest | 3-5x larger |
-| **CPU per frame** | High (decode + convert) | Near-zero |
-| **Battery impact** | Significant | Minimal |
-| **Concurrent players** | 2-4 typical | 10-50+ typical |
-| **Alpha support** | VP9/AV1 only | Native |
-| **Startup latency** | Codec init delay | Immediate |
+| Format | Size | PSNR |
+|--------|-----:|-----:|
+| VP9, CRF 18 | 7.0 MB | 49.7 dB |
+| VP9, CRF 30 | 4.7 MB | 48.8 dB |
+| AV1, CRF 28 | 6.4 MB | 46.0 dB |
+| AV1, CRF 35 | 3.7 MB | 44.5 dB |
+| ASTC 4x4 | 95 MB | 59.2 dB |
+| ASTC 5x5 | 85 MB | 55.2 dB |
+| ASTC 6x6 | 63 MB | 52.8 dB |
+| ASTC 8x8 | 38 MB | 49.2 dB |
 
-### When to Use Each
+At similar quality, ASTC is about 4 times the size of VP9 for the glow (5x5 against CRF 18, 6x6 against CRF 30), and about 5.5 times for the manta (8x8 against CRF 18). Zstd shrinks transparent areas well, while video codecs gain most on detailed footage that moves, by predicting each frame from the previous ones. Every ASTC frame is stored on its own, which is also why any frame can be shown directly.
 
-| Use Case | Recommendation |
-|----------|----------------|
-| Single long video | Video codec (smaller files) |
-| Many UI videos | GPU texture (low CPU) |
-| Stickers/effects | GPU texture (many concurrent) |
-| Battery-critical | GPU texture |
-| Bandwidth-critical | Video codec |
+### Playback
 
-### The Math (30fps, 400×400 with alpha)
+The [alpha-video-gpu README](https://github.com/MediaCacheDev/alpha-video-gpu#on-a-budget-android-phone) has measurements on a budget Android phone (a Samsung Galaxy A52s). In short: one 1080p clip kept 3 to 4 cores busy as VP9 or AV1 and under one as ASTC, and 20 glow players saturated all 8 cores as VP9 but used about 2.5 as uncompressed ASTC; 50 still ran with 3.7.
 
-**VP9 YUVA:**
-- File: ~50KB/sec
-- CPU: 5-15ms/frame (decode + convert)
-- 10 concurrent = 50-150ms/frame → **drops frames**
+On the CPU of an M4 Pro, decoding one frame took (one thread):
 
-**ASTC 6×6:**
-- File: ~200KB/sec (4x larger)
-- CPU: 0.2ms/frame (zstd only)
-- 10 concurrent = 2ms/frame → **smooth 60fps**
+| Clip | VP9 (libvpx) | AV1, both streams (dav1d) | ASTC (zstd only) |
+|------|-------------:|--------------------------:|-----------------:|
+| Glow, 400×400 | 0.4–0.6 ms | 0.5–0.6 ms | 0.03–0.06 ms |
+| Manta, 1080p | 2.4–2.7 ms | 2.6–2.9 ms | 0.2–0.7 ms |
+
+Video then still needs converting from YUV to RGBA before the GPU can draw it. Files encoded with `--zstd 0` skip even the zstd step.
+
+### When to use each
+
+| Use case | Choose |
+|----------|--------|
+| Many animations on screen at once, UI effects, stickers, glows | ASTC |
+| Keeping the CPU free for the app, or the battery | ASTC |
+| Frame-exact seeking and scrubbing | ASTC |
+| Long or high-resolution footage, especially opaque | Video |
+| Download size or app size comes first | Video |
 
 ## Compression Modes
 
@@ -206,18 +205,21 @@ lists each tool with its version or an install hint, and what it is needed for. 
 | Opaque content | `texenc -i ./frames -o video.ktx2 --no-alpha` | the defaults |
 | Long or large video, little RAM | `texenc -v in.mp4 -o video.ktx2 --frame-count 900 --use-stream-encoder` | `stream` |
 
-`--fps` defaults to 30. "Play with" names the `alpha-video-gpu` props; see its README for the memory options.
+"Play with" names the `alpha-video-gpu` props; see its README for the memory options.
 
 ### Basic Usage (Recommended)
 
 Simplest command - auto-detects dimensions, uses sensible defaults (texture array, ASTC 4x4, `thorough` quality, perceptual, inner zstd 18, alpha on):
 
 ```bash
-# From PNG frames
-texenc --input ./frames --output output.ktx2 --fps 30
+# From PNG frames (30 fps unless --fps says otherwise)
+texenc --input ./frames --output output.ktx2
 
-# From video
-texenc --video input.mp4 --output output.ktx2 --fps 30 --frame-count 300
+# From video (the video's frame rate unless --fps says otherwise)
+texenc --video input.mp4 --output output.ktx2 --frame-count 300
+
+# NTSC rates: 29.97 is read as 30000/1001, or give the fraction
+texenc --input ./frames --output output.ktx2 --fps 30000/1001
 ```
 
 ### With Alpha Channel
@@ -249,7 +251,7 @@ texenc --input ./frames --output output.ktx2 --fps 30 --no-alpha
 |-----------|---------|-------------|
 | `-w, --width <px>` | auto | Frame width (auto-detected from input) |
 | `-h, --height <px>` | auto | Frame height (auto-detected from input) |
-| `-f, --fps <num>` | 30 | Frame rate for playback |
+| `-f, --fps <rate>` | the video's, else 30 | Playback frame rate: a whole number, a decimal or a fraction (`30`, `29.97`, `30000/1001`). 23.976, 29.97 and 59.94 are stored as their exact NTSC fractions |
 
 ### ASTC Options
 
@@ -273,27 +275,20 @@ texenc --input ./frames --output output.ktx2 --fps 30 --no-alpha
 
 ## Output Format
 
-A single `.ktx2` file holding an ASTC texture array, one frame per layer, with embedded metadata.
+A single `.ktx2` file holding an ASTC texture array, one frame per layer. Everything a player needs is in standard KTX 2.0 fields, so `ktx info` and other KTX tools read it too:
 
-## Metadata Format
+| What | Where in the file |
+|------|-------------------|
+| Frame width and height | Header: `pixelWidth`, `pixelHeight` |
+| Frame count | Header: `layerCount` (one layer per frame) |
+| ASTC block size and colour space | Header: `vkFormat` (for example `VK_FORMAT_ASTC_4x4_SRGB_BLOCK`) |
+| Frame rate | Key/value data: [`KTXanimData`](https://registry.khronos.org/KTX/specs/2.0/ktxspec.v2.html#_ktxanimdata), the time per frame as a fraction (1/30 s, or 1001/30000 s for 29.97 fps) |
+| Premultiplied alpha | Data format descriptor: the `KHR_DF_FLAG_ALPHA_PREMULTIPLIED` flag |
+| Encoder | Key/value data: `KTXwriter` |
 
-The encoder embeds JSON metadata under the `BasisPlayerMetadata` KTX2 key, which the player reads:
+`KTXanimData` also holds a loop count, which the encoder writes as 0 (loop forever); players loop according to their own `loop` setting. Files without `KTXanimData` play at 30 fps.
 
-```json
-{
-  "version": 1,
-  "type": "BasisPlayerMetadata",
-  "packingMode": "array",
-  "frameCount": 120,
-  "frameRate": 30,
-  "frameWidth": 400,
-  "frameHeight": 400,
-  "hasAlpha": true,
-  "premultipliedAlpha": true,
-  "mode": "astc",
-  "layerCount": 120
-}
-```
+Earlier versions wrote a JSON `BasisPlayerMetadata` entry instead. Everything in it is now read from the fields above, so it's no longer written. Current players don't read it, so older files play at 30 fps; encode them again to keep another rate.
 
 ## Memory-Efficient Stream Encoder
 

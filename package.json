@@ -11,6 +11,7 @@
     "texenc-stream.js",
     "tools.js",
     "zstd-level.js",
+    "ktx2-keys.js",
     "README.md",
     "LICENSE"
   ],
