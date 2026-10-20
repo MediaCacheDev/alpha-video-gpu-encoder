@@ -1,7 +1,7 @@
 {
   "name": "alpha-video-gpu-encoder",
   "version": "1.0.0",
-  "description": "Encode PNG sequences and videos into ASTC KTX2 texture streams for alpha-video-gpu",
+  "description": "Encode PNG sequences and videos into ASTC texture arrays in KTX2 files, with premultiplied alpha, zstd and seek points, for the alpha-video-gpu player.",
   "bin": {
     "texenc": "./texenc.js",
     "texenc-stream": "./texenc-stream.js"
@@ -21,11 +21,21 @@
   "keywords": [
     "ktx2",
     "astc",
-    "texture",
+    "astcenc",
+    "toktx",
+    "ktx-software",
+    "texture-compression",
+    "texture-array",
     "gpu-texture",
-    "animation",
+    "zstd",
     "alpha",
+    "transparency",
+    "transparent-video",
+    "premultiplied-alpha",
+    "animation",
+    "ffmpeg",
     "encoder",
+    "cli",
     "alpha-video-gpu"
   ],
   "author": "Daniel Kasprowicz",
