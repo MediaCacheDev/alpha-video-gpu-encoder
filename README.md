@@ -103,6 +103,10 @@ Video then still needs converting from YUV to RGBA before the GPU can draw it. F
 | Long or high-resolution footage, especially opaque | Video |
 | Download size or app size comes first | Video |
 
+### Frame size
+
+Encode at the size the clip will be drawn, in physical pixels (a 150 pt view on a 3x screen is 450 px), not larger. The files have no mipmaps (smaller, pre-filtered copies of each frame), so a player shrinking a frame to less than half its size takes each pixel on screen from the few texels nearest it and skips the rest. Edges turn jagged and fine detail sparkles as the clip moves, although the frames themselves are clean, and the same clip scaled down as video can look smoother. At 100% or larger, ASTC looks as clean as its source. A smaller frame is also a smaller file: the size of an ASTC frame is proportional to its pixel count.
+
 ## Compression Modes
 
 | Mode | Description | Use Case |
