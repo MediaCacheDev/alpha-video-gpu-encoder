@@ -2,6 +2,8 @@
 
 Encodes video files and image sequences into ASTC texture arrays in KTX2 files for [alpha-video-gpu](https://github.com/MediaCacheDev/alpha-video-gpu).
 
+See its files play next to WebM, APNG and AVIF in the [web demo](https://www.alpha-video.dev) ([source](https://github.com/MediaCacheDev/alpha-video-test)).
+
 ## What It Does
 
 1. **Extracts frames** from video files (MP4, MOV, etc.) or reads PNG sequences
@@ -367,7 +369,7 @@ Play the output with [alpha-video-gpu](https://github.com/MediaCacheDev/alpha-vi
 
 ## Demo and related packages
 
-[alpha-video-test](https://github.com/MediaCacheDev/alpha-video-test) is a React Native app (Android, iOS and web) that plays the same video as KTX2/ASTC, WebM, APNG and AVIF side by side, with FPS, CPU and memory readouts.
+[alpha-video-test](https://github.com/MediaCacheDev/alpha-video-test) is a React Native app (Android, iOS and web) that plays the same video as KTX2/ASTC, WebM, APNG and AVIF side by side, with FPS, CPU and memory readouts. Its web build runs at [www.alpha-video.dev](https://www.alpha-video.dev).
 
 - [alpha-video-gpu](https://github.com/MediaCacheDev/alpha-video-gpu): the player for this encoder's files.
 - [alpha-video](https://github.com/MediaCacheDev/alpha-video): WebM VP9 and AV1 with alpha, for when file size matters more than CPU use.
